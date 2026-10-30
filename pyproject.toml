@@ -1,6 +1,6 @@
 [project]
 name = "epubcast"
-version = "0.6.0"
+version = "0.7.0"
 description = "Turn EPUB e-books into chaptered M4B audiobooks (Kokoro on torch; MLX and Edge optional)"
 authors = [
     { name = "Claudio Santini", email = "hireclaudio@gmail.com" }
