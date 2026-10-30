@@ -12,8 +12,8 @@ characters per second on an M2.
 
 ### What this fork is for
 
-- **Kokoro on torch by default**, so a plain `pip install .` works everywhere. The
-  accelerator — MLX on the Apple GPU — is an opt-in extra (`pip install ".[mlx]"`, Apple
+- **Kokoro on torch by default**, so the default install works everywhere. The
+  accelerator — MLX on the Apple GPU — is an opt-in extra (`./scripts/install.sh --mlx`, Apple
   Silicon only). MLX is faster, but it has been linked to kernel panics on some machines, so
   torch is the safe default.
 - **Measured 906 characters/second on an M5 Max on MLX**, against 238 for the same model on
@@ -35,77 +35,110 @@ params and very natural sounding output, released under the Apache licence and t
 
 ## How to install
 
-You need `espeak-ng` and `ffmpeg`, plus Python 3.10–3.12 (spacy has no wheels for 3.13+).
-
-This fork is **not published to PyPI** — install it from a clone:
+One command, from inside this folder:
 
 ```bash
-brew install ffmpeg espeak-ng                       # on Mac 🍏
-git clone https://github.com/simgsr/epubcast
+./scripts/install.sh
+```
+
+That is the whole install. It leaves you with both entry points working:
+
+```bash
+.venv/bin/epubcast book.epub -v af_sky     # command line
+.venv/bin/epubcast-ui                      # desktop GUI (macOS)
+```
+
+What it does, so nothing is hidden:
+
+- picks a Python in **3.10–3.12** (this project's supported range — spacy publishes no wheels
+  for 3.13+, and Homebrew's plain `python3` is already newer) and creates `.venv/` with it,
+  reusing that venv on later runs
+- installs `ffmpeg` and `espeak-ng` with Homebrew if they are missing — without them a
+  conversion installs fine and then dies at the last step
+- installs the **pinned** dependency set from `requirements.lock` (core, plus the Edge voices,
+  plus the GUI on macOS)
+- installs epubcast itself *editable*, so `epubcast` tracks the working tree
+- verifies the command line, the GUI import, the backend, and both system tools — and fails
+  loudly rather than leaving half a working app
+
+It is safe to re-run: after a `git pull`, run it again to pick up new pins. Flags: `--mlx`
+(below), `--no-brew` (never touch Homebrew).
+
+Then [convert a book](#convert-a-book).
+
+### Starting from nothing
+
+```bash
+git clone https://github.com/simgsr/epubcast   # only if you do not have the folder yet
 cd epubcast
-pip install .
+./scripts/install.sh
 ```
 
-That installs the default **torch** backend — Kokoro through PyTorch — which works on any
-machine. On Apple Silicon you can opt into the faster **MLX** backend, which runs on the
-Apple GPU (it pulls in `mlx-audio`):
+> Do **not** paste the `git clone` line while inside a folder that already holds `epubcast/`.
+> It fails with `fatal: destination path 'epubcast' already exists and is not an empty
+> directory`, the `cd epubcast` after it lands in the wrong place, and the install step then
+> reports `ERROR: Directory '.' is not installable. Neither 'setup.py' nor 'pyproject.toml'
+> found.` — the folder is fine, only the copy-paste was.
+
+### Doing it by hand
+
+The same steps, if you would rather not run a script, or to see exactly what it does — and the
+only path on Linux/Windows without `brew`:
 
 ```bash
-pip install ".[mlx]"      # Apple Silicon only — optional accelerator
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.lock
+.venv/bin/python -m pip install --no-deps -e .
 ```
 
-> The `[mlx]` extra only installs on Apple Silicon; it is ignored elsewhere, where the
-> default torch backend is all you have (and all you need). MLX is faster but has been
-> linked to kernel panics on some machines, which is why it is no longer the default.
+Call **`.venv/bin/python -m pip`**, never a bare `pip`: on Homebrew and most distro Pythons a
+bare `pip` is refused with `error: externally-managed-environment` (PEP 668), or is simply a
+different interpreter than the one the venv was built with.
 
-**On a PC / Linux**, the one-liner that installs everything you need (core + edge) is:
+### Extras
+
+The default install is the **torch** backend — Kokoro through PyTorch — which works on any
+machine, plus the Edge voices and, on macOS, the GUI. One extra is opt-in:
 
 ```bash
-pip install -r requirements.txt
+./scripts/install.sh --mlx     # Apple GPU accelerator (Apple Silicon only)
 ```
 
-That file mirrors `pyproject.toml`: it has the core dependencies (which include `kokoro`) and
-the `[edge]` extra, so `edge-tts` is installed too. (The `[gui]` extra is left out; add it
-with `pip install ".[gui]"` if you want the desktop UI.)
+or by hand: `.venv/bin/python -m pip install -e ".[mlx]"`.
+
+| Extra | In the default install? | What it adds |
+|---|---|---|
+| `mlx` | no — opt-in | [MLX](https://github.com/Blaizzy/mlx-audio) on the Apple GPU: ~3.8x faster than torch, but linked to kernel panics on some machines, which is why it is not the default |
+| `edge` | yes | Microsoft Edge's online neural voices: real Cantonese, native traditional-script reading, no model download — but the book's text is sent to Microsoft's servers at synthesis time, so `auto` never picks it. Select it with `--backend edge` |
+| `gui` | yes, on macOS | `wxpython` + `pillow` for the desktop UI behind `epubcast-ui`. Gated to macOS because wxPython ships no Linux wheels |
+
+> The `[mlx]` extra only installs on Apple Silicon; elsewhere it is ignored and the torch
+> backend is all you have — and all you need.
+
+Edge is the one extra whose behaviour shows up during a run: it batches several consecutive
+sentences into a single network call rather than paying one round trip per sentence, and keeps
+a few batches in flight together — ramping up gradually and dropping back to one at a time the
+moment a request needs a retry, since Edge is known to throttle requests fired back to back.
 
 ### Reproducible installs
 
-`pip install .` and `requirements.txt` both resolve from version *ranges*, so two installs a
-few weeks apart can land on different versions — newer `spacy`, newer `torch`, a different
-`mlx-audio`. When you need the same environment twice, use one of the two pinned paths:
-
-```bash
-pip install poetry
-poetry install                 # reads poetry.lock, not the ranges
-```
-
-```bash
-pip install -r requirements.lock   # same pins, for a pip-only workflow (core + edge)
-```
+`requirements.txt` and a plain `pip install .` both resolve from version *ranges*, so two
+installs a few weeks apart can land on different versions — newer `spacy`, newer `torch`, a
+different `mlx-audio`. `scripts/install.sh` therefore installs from **`requirements.lock`**,
+which is fully pinned (core + `edge`, and `gui` on macOS), and that is the path CI uses too.
 
 `requirements.lock` is generated from the lockfile with
-`poetry export -f requirements.txt --without-hashes --without-urls --extras edge`; CI
-regenerates it and fails if the committed copy differs. CI also runs `poetry check --lock`, so
-a `pyproject.toml` change that was not carried into the lock fails the build instead of
+`poetry export -f requirements.txt --without-hashes --without-urls --extras edge --extras gui`;
+CI regenerates it and fails if the committed copy differs. CI also runs `poetry check --lock`,
+so a `pyproject.toml` change that was not carried into the lock fails the build instead of
 drifting quietly. `.python-version` pins the interpreter at 3.12.
+
+If you already use poetry, `poetry install` reads `poetry.lock` and gives you the same pins —
+but do not mix the two environments, and note that the script's `.venv/` is invisible to poetry.
 
 Model weights are pinned too. Both engines load from a fixed upstream commit, so a Hugging
 Face repo update cannot change the audio under unchanged code. `--repo-id` overrides the repo,
 and a repo you name yourself floats on its branch unless you pin it.
-
-To also get the **Edge backend** — Microsoft's online neural voices, including real
-Cantonese and native traditional-script reading — add the extra:
-
-```bash
-pip install ".[edge]"
-```
-
-Edge needs network at synthesis time and sends the book's text to Microsoft's servers, so
-it is never chosen by `auto`; pick it explicitly with `--backend edge`. Requests are
-batched — several consecutive sentences per network call, rather than one round trip per
-sentence — and a few batches at a time can be in flight together, ramping up gradually and
-dropping back to one at a time the moment a request needs a retry, since Edge is known to
-throttle requests fired back to back.
 
 ### Environment variables
 
@@ -117,17 +150,19 @@ detection fails.
 | `ESPEAK_LIBRARY` | Path to `libespeak-ng.dylib`/`.so`/`.dll` |
 | `ESPEAK_DATA_PATH` | Path to the `espeak-ng-data` directory. The MLX path needs this because `misaki`'s `espeakng-loader` ships a hardcoded build-machine path that does not exist on your system |
 
-Then you can convert an .epub directly with:
+### Convert a book
 
+```bash
+.venv/bin/epubcast book.epub -v af_sky
 ```
-epubcast book.epub -v af_sky
-```
+
+(or `source .venv/bin/activate` once per shell, then just `epubcast book.epub -v af_sky`)
 
 Everything is written to an **`audiobooks/`** folder, created if missing. Point it elsewhere
 with `-o`:
 
-```
-epubcast book.epub -v af_sky -o ~/Audiobooks
+```bash
+.venv/bin/epubcast book.epub -v af_sky -o ~/Audiobooks
 ```
 
 It first creates one `.wav` per chapter, then produces the `book.m4b` you can play in VLC or
@@ -151,17 +186,16 @@ of it can be committed by accident.
 
 ## How to run the GUI
 
-The GUI is a simple graphical interface to use epubcast:
+The GUI is a simple graphical interface to use epubcast. The install above already includes
+it on macOS — no extra step:
 
-```
-brew install ffmpeg espeak-ng
-pip install ".[gui]"
+```bash
+.venv/bin/epubcast-ui
 ```
 
-Then you can run the GUI with:
-```
-epubcast-ui
-```
+On Linux the GUI is not available: wxPython ships no Linux wheels, so the `[gui]` extra is
+gated to macOS and `epubcast-ui` stops with a message naming the extra. The command line works
+on both.
 
 The GUI shows which backend will actually run, and lets you pick one explicitly. torch is
 the default; the torch device selector is greyed out only when MLX is selected, since it has
@@ -202,9 +236,10 @@ This fork targets Apple Silicon. Linux is covered by one CI job that installs th
 torch backend and converts a book end to end, so it is known to work there, but it is not a
 platform this fork optimises for. Windows is not tested at all.
 
-The default torch backend is what runs on either — `pip install .` — but if that is your
-platform you want [the upstream project](https://github.com/santinic/audiblez) instead,
-which supports it properly and has CI across all three.
+The default torch backend is what runs on either — the hand-install steps in
+[Doing it by hand](#doing-it-by-hand) are the portable path — but if that is your platform you
+want [the upstream project](https://github.com/santinic/audiblez) instead, which supports it
+properly and has CI across all three.
 
 ## Speed
 

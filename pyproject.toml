@@ -48,8 +48,11 @@ edge = [
     "edge-tts (>=7.3.1)",
 ]
 gui = [
-    "wxpython (>=4.2)",
-    "pillow (>=10.0)",
+    # Gated to macOS: wxPython ships no Linux wheels, so an ungated extra would make
+    # `pip install -r requirements.lock` try to build it from source there and fail. The
+    # desktop UI is a macOS feature of this fork; the CLI keeps working everywhere.
+    "wxpython (>=4.2) ; sys_platform == 'darwin'",
+    "pillow (>=10.0) ; sys_platform == 'darwin'",
 ]
 
 [tool.poetry]

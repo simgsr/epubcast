@@ -24,8 +24,31 @@
   lockfile was previously the only pinned environment and nothing consumed it.
 - A status bar, an engine badge in the top bar, and a one-line selection summary above the
   Start button stating how many chapters and characters the run will cover.
+- **`scripts/install.sh`, the one command the README now asks for.** Cloning and installing
+  used to require four commands whose first line (`git clone`) failed for anyone who already
+  had the folder, and whose last (`pip install .`) is refused by Homebrew's Python with
+  `externally-managed-environment` — so following the instructions as written could not work
+  on a current Mac. The script picks a supported interpreter, creates `.venv/`, installs the
+  pinned lockfile, installs the project editable, adds `ffmpeg`/`espeak-ng` through Homebrew
+  when they are missing, and then verifies the CLI, the GUI import, the backend and both
+  system tools instead of declaring success and leaving a half-working app. It is idempotent,
+  so `git pull && ./scripts/install.sh` is the upgrade path.
+- A CI job (`scripts-install`) that runs that command verbatim on a clean macOS checkout, then
+  checks both entry points start, that a second run is a no-op, and that it works from another
+  directory. The README had nothing testing it, which is why it drifted twice.
 
 ### Changed
+
+- **The GUI is now part of the default install on macOS, and pinned.** `epubcast-ui` was
+  installed by every install while wxPython came only with the `[gui]` extra, so the command
+  failed with `ModuleNotFoundError: No module named 'wx'` on a machine that had followed the
+  instructions for the command line. `requirements.lock` is now exported with `--extras edge
+  --extras gui`, and the `[gui]` extra is gated to `sys_platform == 'darwin'` in
+  `pyproject.toml`: wxPython publishes no Linux wheels, so an ungated extra would have made
+  `pip install -r requirements.lock` attempt a source build there and fail.
+- CI's macos job installs `.[gui]` and imports `wx` on each supported Python (3.10, 3.11,
+  3.12), and the lock-in-sync job regenerates `requirements.lock` with the same `--extras`
+  the script installs, so the GUI pins cannot silently drop out again.
 
 - **The torch engine now loads its weights at a pinned upstream commit too.** Previously its
   entry in `DEFAULT_REVISIONS` only recorded what had been validated, because `kokoro` 0.9.4
@@ -58,6 +81,11 @@
 
 ### Fixed
 
+- **`epubcast-ui` died with a bare `ModuleNotFoundError: No module named 'wx'`.** Every
+  install puts that command on PATH, but wxPython arrives only with the `[gui]` extra, so a
+  machine that had followed the instructions for the command line got a traceback naming a
+  package it was never told to install. The import now names the extra and the command that
+  installs it.
 - The Linux CI job had been failing on every push for four runs, before any Python was
   installed: the pinned FFmpeg autobuild tag (`autobuild-2026-08-19-19-21`) had been pruned
   by upstream, so the download 404'd. Re-pinned to a tag that exists, with the hash taken

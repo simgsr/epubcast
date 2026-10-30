@@ -48,6 +48,13 @@ jobs:
           assert resolve_backend('auto') == 'torch', 'auto still prefers torch when both are installed'
           print('mlx installed; auto still prefers torch - as intended')
           PY
+      # `epubcast-ui` is installed by any install, but wxPython only arrives with the [gui]
+      # extra: without this step a wheel that disappears for a supported Python would only
+      # surface as "No module named 'wx'" on a user's machine.
+      - name: Install the GUI extra and confirm it imports
+        run: |
+          pip install ".[gui]"
+          python -c "import wx, epubcast.ui; print('gui: wxPython', wx.__version__)"
       - name: Unit tests
         run: |
           python test/test_extract_text.py
@@ -175,10 +182,34 @@ jobs:
       # whenever the lockfile moves. Regenerating and diffing keeps the committed copy honest.
       - name: Confirm requirements.lock matches the lockfile
         run: |
-          poetry export -f requirements.txt --without-hashes --without-urls --extras edge \
-            -o /tmp/requirements.lock
+          poetry export -f requirements.txt --without-hashes --without-urls \
+            --extras edge --extras gui -o /tmp/requirements.lock
           if ! diff -u requirements.lock /tmp/requirements.lock; then
             echo "requirements.lock is stale: regenerate it with the command above."
             exit 1
           fi
 
+
+  # The README's install section is one command, and nothing verified it: it drifted out of
+  # sync with the repo twice (a `git clone` line that could not be re-run, then a `pip install`
+  # that Homebrew's Python refuses). This job runs the documented command verbatim, from a
+  # checkout with no .venv, and then checks both entry points start.
+  scripts-install:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      # The script looks for python3.10-3.12 on PATH; the runner's default `python3` is newer.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run the documented install command
+        run: ./scripts/install.sh
+      - name: Both entry points start
+        run: |
+          .venv/bin/epubcast --help >/dev/null
+          .venv/bin/python -c "import wx, PIL, epubcast.ui; print('gui imports')"
+      - name: Re-running it is a no-op, not an error
+        run: ./scripts/install.sh
+      - name: It also works from another directory
+        run: cd /tmp && "$GITHUB_WORKSPACE/scripts/install.sh"
