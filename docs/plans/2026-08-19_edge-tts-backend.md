@@ -9,7 +9,7 @@ requests — see `perf(edge): batch sentences into fewer Edge requests` and the 
 
 ## Goal & scope
 
-Add an `edge` backend to audiblez that narrates through Microsoft Edge's online TTS
+Add an `edge` backend to epubcast that narrates through Microsoft Edge's online TTS
 service (the `edge-tts` package, already used by the sibling `bookreader` project), beside
 the existing `mlx`/`torch` Kokoro backends. This is the replacement for the aborted
 CosyVoice2 plan (`2026-08-19_cosyvoice2-crosslingual-chinese.md`): it solves the same
@@ -31,7 +31,7 @@ voices) plus the existing ~60 Kokoro voices.
 - `soundfile` 1.2.2 (already a dependency) decodes MP3 in-memory at 24 kHz — the exact
   format edge-tts outputs. No ffmpeg subprocess needed per sentence.
 - `edge_tts.Communicate(text, voice, rate=..., volume=..., pitch=..., boundary=...)` accepts
-  a `rate` string (`"+50%"`, `"-20%"`), which is how audiblez's `speed` (0.5–2.0) maps over.
+  a `rate` string (`"+50%"`, `"-20%"`), which is how epubcast's `speed` (0.5–2.0) maps over.
 - The live catalog has 3 `zh-HK` (Cantonese), 3 `zh-TW` (Taiwanese Mandarin), 6 `zh-CN`
   (Mandarin) voices, plus the usual en/es/fr/de/it/ja/pt/hi sets.
 
@@ -40,8 +40,8 @@ voices) plus the existing ~60 Kokoro voices.
 - **`auto` never picks edge.** Edge needs network and is a different kind of engine; it is
   chosen explicitly with `--backend edge` / the GUI dropdown. `resolve_backend('auto')`
   behaviour is unchanged.
-- Word-boundary timing / karaoke-style highlighting. audiblez produces whole-chapter audio;
-  it has no use for edge-tts's `WordBoundary` events (bookreader does, audiblez does not).
+- Word-boundary timing / karaoke-style highlighting. epubcast produces whole-chapter audio;
+  it has no use for edge-tts's `WordBoundary` events (bookreader does, epubcast does not).
 - A full ~400-voice catalog. The dropdown is curated to the languages Kokoro already
   supports plus the Chinese variants; the rest is reachable by typing a voice name (the
   dropdown stays editable).
@@ -56,12 +56,12 @@ voices) plus the existing ~60 Kokoro voices.
 | File | Why |
 |---|---|
 | `pyproject.toml` | Add an `[edge]` optional extra (`edge-tts`), matching the `[torch]` extra pattern |
-| `audiblez/voices.py` | `edge_voices` dict keyed by locale, edge flags, `is_edge_voice()`, `lang_code_for()` |
-| `audiblez/backends.py` | `BACKENDS` + `edge`, `edge_available()`, `EdgePipeline`, edge ETA seed |
-| `audiblez/chinese.py` | `wants_simplification`: `zh-CN` converts, `zh-TW`/`zh-HK` do not |
-| `audiblez/core.py` | Replace the three `voice[0]` lang-code derivations with `lang_code_for()` |
-| `audiblez/cli.py` | `--backend` choices add `edge`; help text mentions edge locales |
-| `audiblez/ui.py` | Backend dropdown adds `edge`; language multi-selector; voice dropdown filtering |
+| `epubcast/voices.py` | `edge_voices` dict keyed by locale, edge flags, `is_edge_voice()`, `lang_code_for()` |
+| `epubcast/backends.py` | `BACKENDS` + `edge`, `edge_available()`, `EdgePipeline`, edge ETA seed |
+| `epubcast/chinese.py` | `wants_simplification`: `zh-CN` converts, `zh-TW`/`zh-HK` do not |
+| `epubcast/core.py` | Replace the three `voice[0]` lang-code derivations with `lang_code_for()` |
+| `epubcast/cli.py` | `--backend` choices add `edge`; help text mentions edge locales |
+| `epubcast/ui.py` | Backend dropdown adds `edge`; language multi-selector; voice dropdown filtering |
 | `test/test_backends.py` | `EdgePipeline` adapter tests with a fake `edge_tts` module |
 | `test/test_chinese.py` | `zh-CN`/`zh-TW`/`zh-HK` conversion decisions |
 | `test/test_cli.py` | `--help` lists the edge backend and an edge voice |

@@ -47,7 +47,7 @@ def _acquire():
             return _acquire_windows()
         if system == 'Linux':
             return _acquire_with_helper([
-                'systemd-inhibit', '--what=idle:sleep', '--who=audiblez',
+                'systemd-inhibit', '--what=idle:sleep', '--who=epubcast',
                 '--why=Converting an e-book to an audiobook', '--mode=block',
                 'sleep', 'infinity'])
     except Exception as e:

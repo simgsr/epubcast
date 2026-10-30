@@ -1,5 +1,5 @@
 # The package used to append its own directory to sys.path so that `from core import main`
-# resolved. That made audiblez's modules importable under bare top-level names such as
+# resolved. That made epubcast's modules importable under bare top-level names such as
 # `core`, `ui` and `backends`, where they could shadow unrelated modules. The imports are
 # fully qualified now, so the path hack is gone.
 

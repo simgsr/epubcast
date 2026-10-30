@@ -1,11 +1,12 @@
-# audiblez-mlx: Generate audiobooks from e-books (Kokoro on torch, MLX optional)
+# epubcast: turn EPUB e-books into chaptered M4B audiobooks
 
-![Audiblez GUI on MacOSX](./imgs/mac.png)
+![epubcast GUI on macOS](./imgs/mac.png)
 
-**This is a fork of [audiblez](https://github.com/santinic/audiblez).** It runs Kokoro's
-text-to-speech through PyTorch by default (portable, works on any machine) and can speed it
-up with [MLX](https://github.com/Blaizzy/mlx-audio) on the Apple GPU. Upstream audiblez runs
-Kokoro purely on the CPU on a Mac, which is slow — about 60 characters per second on an M2.
+**This is a fork of [audiblez](https://github.com/santinic/audiblez), renamed and re-scoped.**
+It runs Kokoro's text-to-speech through PyTorch by default (portable, works on any machine)
+and can speed it up with [MLX](https://github.com/Blaizzy/mlx-audio) on the Apple GPU.
+Upstream audiblez runs Kokoro purely on the CPU on a Mac, which is slow — about 60
+characters per second on an M2.
 
 ### What this fork is for
 
@@ -38,8 +39,8 @@ This fork is **not published to PyPI** — install it from a clone:
 
 ```bash
 brew install ffmpeg espeak-ng                       # on Mac 🍏
-git clone https://github.com/simgsr/audiblez-mlx
-cd audiblez-mlx
+git clone https://github.com/simgsr/epubcast
+cd epubcast
 pip install .
 ```
 
@@ -92,14 +93,14 @@ detection fails.
 Then you can convert an .epub directly with:
 
 ```
-audiblez book.epub -v af_sky
+epubcast book.epub -v af_sky
 ```
 
 Everything is written to an **`audiobooks/`** folder, created if missing. Point it elsewhere
 with `-o`:
 
 ```
-audiblez book.epub -v af_sky -o ~/Audiobooks
+epubcast book.epub -v af_sky -o ~/Audiobooks
 ```
 
 It first creates one `.wav` per chapter, then produces the `book.m4b` you can play in VLC or
@@ -123,7 +124,7 @@ of it can be committed by accident.
 
 ## How to run the GUI
 
-The GUI is a simple graphical interface to use audiblez:
+The GUI is a simple graphical interface to use epubcast:
 
 ```
 brew install ffmpeg espeak-ng
@@ -132,7 +133,7 @@ pip install ".[gui]"
 
 Then you can run the GUI with:
 ```
-audiblez-ui
+epubcast-ui
 ```
 
 The GUI shows which backend will actually run, and lets you pick one explicitly. torch is
@@ -143,7 +144,7 @@ no effect there.
 
 A full-length novel takes hours, and an idle Mac suspending halfway through stops the
 synthesis with it. So for as long as a conversion is running — GUI or CLI, right through the
-final ffmpeg pass that writes the `.m4b` — audiblez holds a wake lock (`caffeinate` on macOS,
+final ffmpeg pass that writes the `.m4b` — epubcast holds a wake lock (`caffeinate` on macOS,
 `systemd-inhibit` on Linux, `SetThreadExecutionState` on Windows) and drops it the moment the
 book is finished. The display is left alone and may sleep as usual.
 
@@ -165,7 +166,7 @@ which supports it properly and has CI across all three.
 By default the audio is generated using a normal speed, but you can make it up to twice slower or faster by specifying a speed argument between 0.5 to 2.0:
 
 ```
-audiblez book.epub -v af_sky -s 1.5
+epubcast book.epub -v af_sky -s 1.5
 ```
 
 Measured on an M5 Max, synthesizing the same paragraph with `af_sky`:
@@ -255,10 +256,10 @@ Cantonese. Use them with `--backend edge`:
 
 ```
 # Traditional script, read as written, in Mandarin
-audiblez book.epub -v zh-TW-HsiaoChenNeural --backend edge
+epubcast book.epub -v zh-TW-HsiaoChenNeural --backend edge
 
 # Traditional script, read in Cantonese
-audiblez book.epub -v zh-HK-HiuMaanNeural --backend edge
+epubcast book.epub -v zh-HK-HiuMaanNeural --backend edge
 ```
 
 ## Choosing a backend
@@ -267,10 +268,10 @@ The torch backend is the default and is used automatically. Pick an engine expli
 `--backend`:
 
 ```
-audiblez book.epub -v af_sky --backend torch   # default: Kokoro through PyTorch
-audiblez book.epub -v af_sky --backend mlx     # force MLX (Apple Silicon only, needs ".[mlx]")
-audiblez book.epub -v zh-TW-HsiaoChenNeural --backend edge   # Microsoft's online TTS (needs the [edge] extra + network)
-audiblez book.epub -v af_sky --backend auto    # default: torch when installed, else MLX
+epubcast book.epub -v af_sky --backend torch   # default: Kokoro through PyTorch
+epubcast book.epub -v af_sky --backend mlx     # force MLX (Apple Silicon only, needs ".[mlx]")
+epubcast book.epub -v zh-TW-HsiaoChenNeural --backend edge   # Microsoft's online TTS (needs the [edge] extra + network)
+epubcast book.epub -v af_sky --backend auto    # default: torch when installed, else MLX
 ```
 
 MLX runs the model in `bf16` where Torch runs `fp32`. Output is equivalent in duration
@@ -280,7 +281,7 @@ across a chapter. Use `--backend torch` if you want upstream's exact output.
 Point either backend at a different model repo, for example a quantized one:
 
 ```
-audiblez book.epub -v af_sky --repo-id mlx-community/Kokoro-82M-8bit
+epubcast book.epub -v af_sky --repo-id mlx-community/Kokoro-82M-8bit
 ```
 
 If you have an Nvidia GPU, `--cuda` still selects it for the torch backend. It is ignored on
@@ -336,10 +337,10 @@ To do so, you can use `--pick` to interactively choose the chapters to convert (
 
 ## Help page
 
-For all the options available, you can check the help page `audiblez --help`:
+For all the options available, you can check the help page `epubcast --help`:
 
 ```
-usage: audiblez [-h] [-v VOICE] [-p] [-s SPEED] [-c] [-o FOLDER]
+usage: epubcast [-h] [-v VOICE] [-p] [-s SPEED] [-c] [-o FOLDER]
                 [-b {auto,torch,mlx,edge}] [--lang CODE] [--repo-id REPO]
                 epub_file_path
 
@@ -370,10 +371,10 @@ options:
                         default
 
 example:
-  audiblez book.epub -v af_sky
+  epubcast book.epub -v af_sky
 
 to run GUI just run:
-  audiblez-ui
+  epubcast-ui
 ```
 
 ## Voices beyond the built-in list
@@ -381,8 +382,8 @@ to run GUI just run:
 Kokoro's `load_voice` accepts more than the names above, and both Kokoro backends pass it through:
 
 ```
-audiblez book.epub -v af_heart,af_bella          # blend two voices (averaged)
-audiblez book.epub -v /path/to/voice.pt --lang a # a custom voice pack
+epubcast book.epub -v af_heart,af_bella          # blend two voices (averaged)
+epubcast book.epub -v /path/to/voice.pt --lang a # a custom voice pack
 ```
 
 Pass `--lang` with a `.pt` path, since the language can no longer be read off the voice name.
@@ -393,6 +394,6 @@ Upstream audiblez by [Claudio Santini](https://claudio.uk) in 2025, distributed 
 
 Related Article: [Audiblez v4: Generate Audiobooks from E-books](https://claudio.uk/posts/audiblez-v4.html)
 
-This Apple Silicon / MLX fork is maintained separately at
-[simgsr/audiblez-mlx](https://github.com/simgsr/audiblez-mlx), under the same MIT licence.
+This fork is maintained at [simgsr/epubcast](https://github.com/simgsr/epubcast),
+under the same MIT licence.
 MLX inference via [mlx-audio](https://github.com/Blaizzy/mlx-audio).

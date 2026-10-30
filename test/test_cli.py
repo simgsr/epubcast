@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from unittest import mock
 
-from audiblez.cli import check_backend_installed
+from epubcast.cli import check_backend_installed
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # The epub fixture is gitignored (see .gitignore: *.epub), so it is not in the repo; the
@@ -15,7 +15,7 @@ EPUB_FIXTURE = REPO_ROOT / 'epub' / 'mini.epub'
 @unittest.skipUnless(EPUB_FIXTURE.exists(), 'epub/mini.epub fixture not present')
 class CliTest(unittest.TestCase):
     def cli(self, args):
-        cmd = f'cd "{REPO_ROOT}" && python -m audiblez.cli {args}'
+        cmd = f'cd "{REPO_ROOT}" && python -m epubcast.cli {args}'
         return os.popen(cmd).read()
 
     def test_help(self):
@@ -73,11 +73,11 @@ class CheckBackendInstalledTest(unittest.TestCase):
     can't run, and passes silently when it can."""
 
     def run_check(self, backend, mlx=False, torch=False, edge=False, apple=False):
-        with mock.patch('audiblez.cli.mlx_available', return_value=mlx), \
-             mock.patch('audiblez.cli.torch_available', return_value=torch), \
-             mock.patch('audiblez.cli.edge_available', return_value=edge), \
-             mock.patch('audiblez.cli.is_apple_silicon', return_value=apple), \
-             mock.patch('audiblez.cli.sys.exit', side_effect=SystemExit) as exit_:
+        with mock.patch('epubcast.cli.mlx_available', return_value=mlx), \
+             mock.patch('epubcast.cli.torch_available', return_value=torch), \
+             mock.patch('epubcast.cli.edge_available', return_value=edge), \
+             mock.patch('epubcast.cli.is_apple_silicon', return_value=apple), \
+             mock.patch('epubcast.cli.sys.exit', side_effect=SystemExit) as exit_:
             try:
                 check_backend_installed(backend)
             except SystemExit:

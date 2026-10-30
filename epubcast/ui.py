@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# A simple wxWidgets UI for audiblez
+# A simple wxWidgets UI for epubcast
 
 import numpy as np
 import soundfile
@@ -16,9 +16,9 @@ from wx.lib.scrolledpanel import ScrolledPanel
 from PIL import Image
 from tempfile import NamedTemporaryFile
 
-from audiblez import DEFAULT_OUTPUT_FOLDER
-from audiblez.backends import edge_available, mlx_available, resolve_backend, torch_available
-from audiblez.voices import (voices, flags, edge_voices, edge_flags, lang_code_for,
+from epubcast import DEFAULT_OUTPUT_FOLDER
+from epubcast.backends import edge_available, mlx_available, resolve_backend, torch_available
+from epubcast.voices import (voices, flags, edge_voices, edge_flags, lang_code_for,
                              default_languages, is_catalog_voice)
 
 EVENTS = {
@@ -165,7 +165,7 @@ class MainWindow(wx.Frame):
         self.re_enable_after_synthesis()
         wx.MessageBox(f'Synthesis failed:\n\n{event.message}\n\n'
                       'The full traceback is on the terminal.',
-                      'Audiblez', wx.OK | wx.ICON_ERROR, self)
+                      'Epubcast', wx.OK | wx.ICON_ERROR, self)
 
     def re_enable_after_synthesis(self):
         """Undo the disabling on_start did. Safe to call before any book is open."""
@@ -271,7 +271,7 @@ class MainWindow(wx.Frame):
                "Distributed under the MIT License.\n\n" +
                "by Claudio Santini 2025\nand many contributors.\n\n" +
                "https://claudio.uk\n\n")
-        wx.MessageBox(msg, "Audiblez")
+        wx.MessageBox(msg, "Epubcast")
 
     def create_right_panel(self, splitter_right):
         self.right_panel = ScrolledPanel(splitter_right, style=wx.TAB_TRAVERSAL)
@@ -576,7 +576,7 @@ class MainWindow(wx.Frame):
         print(f"Opening file: {file_path}")  # Do something with the filepath (e.g., parse the EPUB)
 
         from ebooklib import epub
-        from audiblez.core import find_document_chapters_and_extract_texts, find_good_chapters, find_cover
+        from epubcast.core import find_document_chapters_and_extract_texts, find_good_chapters, find_cover
         book = epub.read_epub(file_path)
         meta_title = book.get_metadata('DC', 'title')
         self.selected_book_title = meta_title[0][0] if meta_title else ''
@@ -709,8 +709,8 @@ class MainWindow(wx.Frame):
             button.Enable()
 
         def generate_preview():
-            import audiblez.core as core
-            from audiblez.backends import get_pipeline
+            import epubcast.core as core
+            from epubcast.backends import get_pipeline
             try:
                 # Same engine as the real run, or previews stop being representative.
                 core.set_espeak_library()
@@ -733,7 +733,7 @@ class MainWindow(wx.Frame):
             except Exception as e:
                 traceback.print_exc()
                 wx.CallAfter(wx.MessageBox, f'Preview failed:\n\n{type(e).__name__}: {e}',
-                             'Audiblez', wx.OK | wx.ICON_ERROR)
+                             'Epubcast', wx.OK | wx.ICON_ERROR)
             finally:
                 # wx widgets are only safe to touch from the main thread, and the button has
                 # to come back even when the preview raised -- otherwise it stays on "⏳"
@@ -810,7 +810,7 @@ class CoreThread(threading.Thread):
         self.params = params
 
     def run(self):
-        import audiblez.core as core
+        import epubcast.core as core
         try:
             core.main(**self.params, post_event=self.post_event)
         except Exception as e:
@@ -831,7 +831,7 @@ class CoreThread(threading.Thread):
 def main():
     print('Starting GUI...')
     app = wx.App(False)
-    frame = MainWindow(None, "Audiblez - Generate Audiobooks from E-books")
+    frame = MainWindow(None, "Epubcast - Generate Audiobooks from E-books")
     frame.Show(True)
     frame.Layout()
     app.SetTopWindow(frame)

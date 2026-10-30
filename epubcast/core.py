@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# audiblez - A program to convert e-books into audiobooks using
+# epubcast - A program to convert e-books into audiobooks using
 # Kokoro-82M model for high-quality text-to-speech synthesis.
 # by Claudio Santini 2025 - https://claudio.uk
 import concurrent.futures
@@ -26,11 +26,11 @@ from bs4 import BeautifulSoup, CData, Comment, Declaration, Doctype, NavigableSt
 from ebooklib import epub
 from pick import pick
 
-from audiblez import DEFAULT_OUTPUT_FOLDER
-from audiblez import chinese
-from audiblez import power
-from audiblez.backends import EdgeNoAudio, EdgePipeline, get_pipeline, initial_chars_per_sec, resolve_backend
-from audiblez.voices import lang_code_for
+from epubcast import DEFAULT_OUTPUT_FOLDER
+from epubcast import chinese
+from epubcast import power
+from epubcast.backends import EdgeNoAudio, EdgePipeline, get_pipeline, initial_chars_per_sec, resolve_backend
+from epubcast.voices import lang_code_for
 
 sample_rate = 24000
 
@@ -261,7 +261,7 @@ def measured_chars_per_sec(stats):
 
 
 _sentencizer = None
-# audiblez/ui.py can run gen_audio_segments from two threads at once -- the main
+# epubcast/ui.py can run gen_audio_segments from two threads at once -- the main
 # book-synthesis thread and a chapter-preview thread -- and the sentencizer below is now a
 # single instance shared across every call rather than one built fresh per call. spaCy's
 # Language objects (this one includes a tok2vec/NER component, not just the rule-based
@@ -338,7 +338,7 @@ def gen_audio_segments(pipeline, text, voice, speed, stats=None, max_sentences=N
     # Before sentence splitting, so the segmenter sees the same characters the model will.
     text = chinese.normalize(text, lang_code, notify=print)
     # Locked: this nlp is a single instance shared across every call (see _get_sentencizer),
-    # and gen_audio_segments can run concurrently from more than one thread (audiblez/ui.py
+    # and gen_audio_segments can run concurrently from more than one thread (epubcast/ui.py
     # runs book synthesis and chapter preview on separate threads), so calls into it are
     # serialized rather than racing on its internal state.
     with _sentencizer_lock:

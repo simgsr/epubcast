@@ -1,6 +1,6 @@
 import unittest
 
-from audiblez.core import (MIN_LENGTH_TO_SPLIT, extract_sections_from_html, extract_text_from_html,
+from epubcast.core import (MIN_LENGTH_TO_SPLIT, extract_sections_from_html, extract_text_from_html,
                            escape_metadata, find_document_chapters_and_extract_texts)
 
 

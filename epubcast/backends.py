@@ -17,7 +17,7 @@ import time
 from glob import glob
 from pathlib import Path
 
-from audiblez.voices import is_edge_voice, lang_code_for
+from epubcast.voices import is_edge_voice, lang_code_for
 
 BACKENDS = ('auto', 'torch', 'mlx', 'edge')
 
@@ -278,10 +278,10 @@ class EdgePipeline:
 
     Yields (graphemes, phonemes, audio) like the Kokoro pipelines do; graphemes and
     phonemes are None. Audio is decoded from the MP3 edge-tts returns (24kHz, the same
-    rate audiblez writes) to numpy so np.concatenate downstream is unaffected.
+    rate epubcast writes) to numpy so np.concatenate downstream is unaffected.
 
     Each __call__ is one network request, run with asyncio.run() in whichever thread calls
-    it -- audiblez's core is synchronous, so there is no running event loop in any given
+    it -- epubcast's core is synchronous, so there is no running event loop in any given
     thread for asyncio.run() to clash with, and a fresh event loop per thread is fine.
     split_pattern is accepted and ignored: edge-tts needs no sentence-level split pattern.
     """

@@ -3,7 +3,7 @@ from pathlib import Path
 
 from ebooklib import epub
 
-from audiblez.core import find_document_chapters_and_extract_texts, find_good_chapters
+from epubcast.core import find_document_chapters_and_extract_texts, find_good_chapters
 
 # The fixture books are gitignored (see .gitignore: *.epub), so they are not in the repo;
 # the whole class skips when they are absent rather than failing a fresh clone.

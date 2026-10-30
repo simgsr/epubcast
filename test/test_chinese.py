@@ -4,7 +4,7 @@ import types
 import unittest
 from unittest import mock
 
-from audiblez import chinese
+from epubcast import chinese
 
 
 TRADITIONAL = '他發現裡面的東西乾乾淨淨。歷史上，臺灣的鐵路系統很發達。'

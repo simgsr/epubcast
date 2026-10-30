@@ -100,7 +100,7 @@ def is_edge_voice(voice):
 
 
 def is_catalog_voice(voice):
-    """True when `voice` is one audiblez lists, rather than one the user typed in.
+    """True when `voice` is one epubcast lists, rather than one the user typed in.
 
     A .pt path, a blend and an Edge voice outside the curated locales are all legal to
     type but appear in no list, so callers must not treat their absence as "gone".

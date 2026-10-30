@@ -1,4 +1,4 @@
-# audiblez-mlx dependencies (torch / Kokoro is the default engine).
+# epubcast-mlx dependencies (torch / Kokoro is the default engine).
 #
 # This mirrors pyproject.toml: the core deps (which include kokoro) plus the [edge]
 # extra. The accelerated MLX engine is an opt-in extra for Apple Silicon only

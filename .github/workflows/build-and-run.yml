@@ -29,11 +29,11 @@ jobs:
       - name: Install
         run: pip install .
       - name: Check it runs as a script
-        run: audiblez --help
+        run: epubcast --help
       - name: Confirm torch is the default backend and MLX is opt-in
         run: |
           python - <<'PY'
-          from audiblez.backends import mlx_available, torch_available, resolve_backend
+          from epubcast.backends import mlx_available, torch_available, resolve_backend
           assert torch_available(), 'kokoro/torch should install by default'
           assert not mlx_available(), 'mlx-audio must not be pulled in by the base install'
           assert resolve_backend('auto') == 'torch'
@@ -43,7 +43,7 @@ jobs:
         run: |
           pip install ".[mlx]"
           python - <<'PY'
-          from audiblez.backends import mlx_available, resolve_backend
+          from epubcast.backends import mlx_available, resolve_backend
           assert mlx_available(), 'the [mlx] extra should make mlx available on Apple Silicon'
           assert resolve_backend('auto') == 'torch', 'auto still prefers torch when both are installed'
           print('mlx installed; auto still prefers torch - as intended')
@@ -60,7 +60,7 @@ jobs:
       - name: Download test epub
         run: curl -sSL -o book.epub "$TEST_EPUB_URL"
       - name: Create audiobook
-        run: audiblez book.epub -v af_sky
+        run: epubcast book.epub -v af_sky
       - name: Check the m4b landed in the default output folder
         run: |
           ls -lah audiobooks/book.m4b
@@ -121,7 +121,7 @@ jobs:
       - name: Confirm the torch backend is selected off Apple Silicon
         run: |
           python - <<'PY'
-          from audiblez.backends import mlx_available, torch_available, resolve_backend
+          from epubcast.backends import mlx_available, torch_available, resolve_backend
           assert not mlx_available(), 'mlx must not be used off Apple Silicon'
           assert torch_available(), 'the [torch] extra should provide kokoro'
           assert resolve_backend('auto') == 'torch'
@@ -139,7 +139,7 @@ jobs:
       - name: Download test epub
         run: curl -sSL -o book.epub "$TEST_EPUB_URL"
       - name: Create audiobook
-        run: audiblez book.epub -v af_sky --backend torch
+        run: epubcast book.epub -v af_sky --backend torch
       - name: Check the m4b landed in the default output folder
         run: |
           ls -lah audiobooks/book.m4b

@@ -3,7 +3,7 @@ import subprocess
 import unittest
 from unittest import mock
 
-from audiblez import power
+from epubcast import power
 
 
 class FakeProc:
@@ -94,12 +94,12 @@ class KeepAwakeTest(unittest.TestCase):
 
 class MainIsWrappedTest(unittest.TestCase):
     def test_core_main_holds_the_lock_for_the_whole_run(self):
-        import audiblez.core
+        import epubcast.core
         held = []
         with mock.patch.object(power, '_acquire', return_value=lambda: held.append('released')) as acquire:
             with self.assertRaises(Exception):
                 # Fails on the missing file, long after the lock should have been taken.
-                audiblez.core.main('no-such-book.epub', voice='af_sky', pick_manually=False, speed=1.0)
+                epubcast.core.main('no-such-book.epub', voice='af_sky', pick_manually=False, speed=1.0)
         acquire.assert_called_once()
         self.assertEqual(held, ['released'])
 

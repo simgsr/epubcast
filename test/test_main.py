@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ebooklib import epub
 
-from audiblez.core import main, find_document_chapters_and_extract_texts
+from epubcast.core import main, find_document_chapters_and_extract_texts
 
 # from phonemizer.backend.espeak.wrapper import EspeakWrapper
 

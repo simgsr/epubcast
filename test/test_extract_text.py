@@ -1,6 +1,6 @@
 import unittest
 
-from audiblez.core import extract_text_from_html
+from epubcast.core import extract_text_from_html
 
 
 class ExtractTextTest(unittest.TestCase):

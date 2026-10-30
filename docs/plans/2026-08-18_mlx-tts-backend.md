@@ -8,7 +8,7 @@ Status: planning only — no code written in this step
 
 Once the running Munger conversion finishes, confirm the audiobook it produced is
 actually correct, settle whether MLX-accelerated Kokoro is faster than the current
-torch path, and — if it is — let audiblez use it via a selectable TTS backend without
+torch path, and — if it is — let epubcast use it via a selectable TTS backend without
 losing Windows/Linux/CUDA support. Then clear four small deferred items already
 identified during this work.
 
@@ -31,10 +31,10 @@ is verification or cleanup.
 
 | File | Reason |
 | --- | --- |
-| `audiblez/backends.py` (new) | Backend factory + MLX adapter; keeps engine choice out of `core.py`. |
-| `audiblez/core.py` | Three concerns: build the pipeline via the factory (`:117`), espeak data path in `set_espeak_library`, `gen_text` (`:246`). |
-| `audiblez/ui.py` | `on_preview_chapter` (`:491`) constructs its own `KPipeline`; must use the factory or previews diverge from output. |
-| `audiblez/cli.py` | New `--backend`, `--lang`, `--repo-id` flags. |
+| `epubcast/backends.py` (new) | Backend factory + MLX adapter; keeps engine choice out of `core.py`. |
+| `epubcast/core.py` | Three concerns: build the pipeline via the factory (`:117`), espeak data path in `set_espeak_library`, `gen_text` (`:246`). |
+| `epubcast/ui.py` | `on_preview_chapter` (`:491`) constructs its own `KPipeline`; must use the factory or previews diverge from output. |
+| `epubcast/cli.py` | New `--backend`, `--lang`, `--repo-id` flags. |
 | `pyproject.toml` | Optional `[mlx]` extra; audit the unused `qwen-tts` / `epub-toc` deps. |
 | `test/test_backends.py` (new) | Factory + adapter contract tests using a fake backend. |
 | `test/test_find_chapters.py` | Stale dracula expectation (see step 7). |

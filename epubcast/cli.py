@@ -2,9 +2,9 @@
 import argparse
 import sys
 
-from audiblez import DEFAULT_OUTPUT_FOLDER
-from audiblez.backends import edge_available, is_apple_silicon, mlx_available, torch_available
-from audiblez.voices import voices, available_voices_str, edge_voices_str
+from epubcast import DEFAULT_OUTPUT_FOLDER
+from epubcast.backends import edge_available, is_apple_silicon, mlx_available, torch_available
+from epubcast.voices import voices, available_voices_str, edge_voices_str
 
 
 def check_backend_installed(backend):
@@ -52,9 +52,9 @@ def check_backend_installed(backend):
 def cli_main():
     voices_str = ', '.join(voices)
     epilog = ('example:\n' +
-              '  audiblez book.epub -v af_sky\n\n' +
+              '  epubcast book.epub -v af_sky\n\n' +
               'to run GUI just run:\n'
-              '  audiblez-ui\n\n' +
+              '  epubcast-ui\n\n' +
               'available Kokoro voices:\n' +
               available_voices_str + '\n\n' +
               'Edge voices (online, needs network; use --backend edge):\n' +
@@ -101,7 +101,7 @@ def cli_main():
         else:
             print('CUDA GPU not available. Defaulting to CPU')
 
-    from audiblez.core import main
+    from epubcast.core import main
     main(args.epub_file_path, args.voice, args.pick, args.speed, args.output,
          backend=args.backend, lang_code=args.lang, repo_id=args.repo_id)
 

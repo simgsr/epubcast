@@ -7,10 +7,10 @@ from unittest import mock
 
 import numpy as np
 
-from audiblez import backends
-from audiblez.backends import get_pipeline, mlx_available, resolve_backend
-from audiblez.core import safe_filename_part
-from audiblez.voices import (DEFAULT_LANGUAGES, DEFAULT_LOCALES, default_languages,
+from epubcast import backends
+from epubcast.backends import get_pipeline, mlx_available, resolve_backend
+from epubcast.core import safe_filename_part
+from epubcast.voices import (DEFAULT_LANGUAGES, DEFAULT_LOCALES, default_languages,
                              edge_voices, is_catalog_voice, is_default_language,
                              is_edge_voice, lang_code_for, voices)
 
@@ -594,18 +594,18 @@ class MeasuredEtaTest(unittest.TestCase):
                                start_time=time.time() - elapsed, total_chars=100000)
 
     def test_keeps_the_seed_until_there_is_enough_data(self):
-        from audiblez.core import measured_chars_per_sec
+        from epubcast.core import measured_chars_per_sec
         self.assertEqual(measured_chars_per_sec(self.stats(processed=100, elapsed=60)), 900)
         self.assertEqual(measured_chars_per_sec(self.stats(processed=50000, elapsed=1)), 900)
 
     def test_switches_to_real_throughput(self):
-        from audiblez.core import measured_chars_per_sec
+        from epubcast.core import measured_chars_per_sec
         rate = measured_chars_per_sec(self.stats(processed=20000, elapsed=100))
         self.assertAlmostEqual(rate, 200, delta=5)
 
     def test_missing_start_time_does_not_explode(self):
         from types import SimpleNamespace
-        from audiblez.core import measured_chars_per_sec
+        from epubcast.core import measured_chars_per_sec
         stats = SimpleNamespace(processed_chars=50000, chars_per_sec=900, total_chars=100000)
         self.assertEqual(measured_chars_per_sec(stats), 900)
 
@@ -614,7 +614,7 @@ class MeasuredEtaTest(unittest.TestCase):
         # instantly; only characters actually synthesized may drive the rate.
         import time
         from types import SimpleNamespace
-        from audiblez.core import measured_chars_per_sec
+        from epubcast.core import measured_chars_per_sec
         stats = SimpleNamespace(processed_chars=800000, synthesized_chars=0,
                                 chars_per_sec=900, total_chars=850000,
                                 start_time=time.time() - 20)
@@ -629,7 +629,7 @@ class ConcatListTest(unittest.TestCase):
     def build_list(self, tmpdir, names):
         import os
         from pathlib import Path
-        from audiblez.core import concat_wavs_with_ffmpeg
+        from epubcast.core import concat_wavs_with_ffmpeg
         from unittest import mock
         out = Path(tmpdir) / 'audiobooks'
         out.mkdir()
@@ -646,8 +646,8 @@ class ConcatListTest(unittest.TestCase):
             Path(cmd[-1]).write_bytes(b'x')  # pretend ffmpeg produced the concat file
             return mock.Mock(returncode=0)
 
-        with mock.patch('audiblez.core.subprocess.run', side_effect=fake_run), \
-             mock.patch('audiblez.core.find_aac_encoder', return_value='aac'):
+        with mock.patch('epubcast.core.subprocess.run', side_effect=fake_run), \
+             mock.patch('epubcast.core.find_aac_encoder', return_value='aac'):
             concat_wavs_with_ffmpeg(files, str(out), 'book.epub')
         return written['content']
 
@@ -675,7 +675,7 @@ class CreateM4bEncoderTest(unittest.TestCase):
     def test_uses_the_found_aac_encoder(self):
         import tempfile
         from pathlib import Path
-        from audiblez.core import create_m4b
+        from epubcast.core import create_m4b
         with tempfile.TemporaryDirectory() as tmp:
             concat = Path(tmp) / 'book.tmp.wav'
             concat.write_bytes(b'x')
@@ -685,9 +685,9 @@ class CreateM4bEncoderTest(unittest.TestCase):
                 calls.append(cmd)
                 return mock.Mock(returncode=0)
 
-            with mock.patch('audiblez.core.concat_wavs_with_ffmpeg', return_value=concat), \
-                 mock.patch('audiblez.core.find_aac_encoder', return_value='libfdk_aac'), \
-                 mock.patch('audiblez.core.subprocess.run', side_effect=fake_run):
+            with mock.patch('epubcast.core.concat_wavs_with_ffmpeg', return_value=concat), \
+                 mock.patch('epubcast.core.find_aac_encoder', return_value='libfdk_aac'), \
+                 mock.patch('epubcast.core.subprocess.run', side_effect=fake_run):
                 create_m4b([], 'book.epub', b'', tmp)
             m4b_cmd = calls[-1]
             self.assertIn('libfdk_aac', m4b_cmd)
@@ -703,7 +703,7 @@ class GenTextLangCodeTest(unittest.TestCase):
 
     def gen_text_lang_code(self, voice, lang_code=None):
         """The lang_code gen_text hands to the pipeline and to gen_audio_segments."""
-        from audiblez import core
+        from epubcast import core
         seen = {}
 
         def fake_get_pipeline(voice, lang_code=None, backend='auto', repo_id=None):
@@ -791,29 +791,29 @@ class BatchForEdgeTest(unittest.TestCase):
     """_batch_for_edge groups sentences for one Edge call each, without dropping any."""
 
     def test_short_sentences_are_merged_into_one_batch(self):
-        from audiblez.core import _batch_for_edge
+        from epubcast.core import _batch_for_edge
         sentences = ['一。', '二。', '三。']
         batches = _batch_for_edge(sentences, max_chars=100)
         self.assertEqual(batches, [sentences])
 
     def test_a_full_batch_starts_a_new_one(self):
-        from audiblez.core import _batch_for_edge
+        from epubcast.core import _batch_for_edge
         sentences = ['a' * 40, 'b' * 40, 'c' * 40]
         batches = _batch_for_edge(sentences, max_chars=50)
         self.assertEqual(batches, [['a' * 40], ['b' * 40], ['c' * 40]])
 
     def test_a_sentence_over_the_budget_gets_its_own_batch_rather_than_being_split(self):
-        from audiblez.core import _batch_for_edge
+        from epubcast.core import _batch_for_edge
         huge = 'x' * 500
         batches = _batch_for_edge(['short.', huge, 'short.'], max_chars=100)
         self.assertEqual(batches, [['short.'], [huge], ['short.']])
 
     def test_empty_input_yields_no_batches(self):
-        from audiblez.core import _batch_for_edge
+        from epubcast.core import _batch_for_edge
         self.assertEqual(_batch_for_edge([], max_chars=100), [])
 
     def test_every_sentence_survives_regardless_of_grouping(self):
-        from audiblez.core import _batch_for_edge
+        from epubcast.core import _batch_for_edge
         sentences = [f'sentence {i}.' for i in range(37)]
         batches = _batch_for_edge(sentences, max_chars=30)
         flattened = [s for batch in batches for s in batch]
@@ -842,14 +842,14 @@ class GenAudioSegmentsEdgeBatchingTest(unittest.TestCase):
                       'This is sentence four. This is sentence five.')
 
     def test_edge_pipeline_receives_fewer_calls_than_there_are_sentences(self):
-        from audiblez.core import gen_audio_segments
+        from epubcast.core import gen_audio_segments
         pipeline = self.RecordingEdgePipeline()
         gen_audio_segments(pipeline, self.FIVE_SENTENCES, voice='en-US-BrianNeural', speed=1.0)
         self.assertEqual(len(pipeline.calls), 1, pipeline.calls)
         self.assertEqual(pipeline.calls[0], self.FIVE_SENTENCES)
 
     def test_edge_pipeline_still_splits_once_the_batch_budget_is_exceeded(self):
-        from audiblez.core import EDGE_BATCH_CHARS, gen_audio_segments
+        from epubcast.core import EDGE_BATCH_CHARS, gen_audio_segments
         sentence = 'This is a filler sentence used to pad the batch past its budget. '
         text = sentence * (EDGE_BATCH_CHARS // len(sentence) + 5)
         pipeline = self.RecordingEdgePipeline()
@@ -862,7 +862,7 @@ class GenAudioSegmentsEdgeBatchingTest(unittest.TestCase):
         self.assertEqual(actual_count, expected_count, 'no sentence should be dropped or duplicated')
 
     def test_non_edge_pipelines_keep_one_call_per_sentence(self):
-        from audiblez.core import gen_audio_segments
+        from epubcast.core import gen_audio_segments
         calls = []
 
         def fake_pipeline(sent_text, voice, speed=1.0, split_pattern=None):
@@ -904,7 +904,7 @@ class GenAudioSegmentsConcurrencyDispatchTest(unittest.TestCase):
     SIX_SENTENCES = ' '.join(f'This is sentence number {i}.' for i in range(6))
 
     def test_overlaps_calls_for_a_pipeline_that_opts_in(self):
-        from audiblez.core import gen_audio_segments
+        from epubcast.core import gen_audio_segments
         pipeline = SlowConcurrentPipeline(max_concurrency=3)
         gen_audio_segments(pipeline, self.SIX_SENTENCES, voice='en-US-BrianNeural', speed=1.0)
         self.assertGreater(pipeline.max_active_seen, 1,
@@ -912,13 +912,13 @@ class GenAudioSegmentsConcurrencyDispatchTest(unittest.TestCase):
         self.assertLessEqual(pipeline.max_active_seen, 3, 'must not exceed max_concurrency')
 
     def test_stays_serial_when_max_concurrency_is_one(self):
-        from audiblez.core import gen_audio_segments
+        from epubcast.core import gen_audio_segments
         pipeline = SlowConcurrentPipeline(max_concurrency=1)
         gen_audio_segments(pipeline, self.SIX_SENTENCES, voice='en-US-BrianNeural', speed=1.0)
         self.assertEqual(pipeline.max_active_seen, 1)
 
     def test_stays_serial_for_a_pipeline_that_never_opts_in(self):
-        from audiblez.core import gen_audio_segments
+        from epubcast.core import gen_audio_segments
         calls = []
 
         def fake_pipeline(sent_text, voice, speed=1.0, split_pattern=None):
@@ -934,7 +934,7 @@ class GenAudioSegmentsConcurrencyDispatchTest(unittest.TestCase):
         # guarantees the 2nd chunk's network round trip returns before the 5th's) -- what
         # gen_audio_segments must still guarantee is that its *returned* audio comes back
         # in chunk order, since that is what gets concatenated into the chapter's .wav.
-        from audiblez.core import gen_audio_segments
+        from epubcast.core import gen_audio_segments
 
         class IndexTaggedPipeline(SlowConcurrentPipeline):
             """Each chunk's 'audio' is its own sentence index, so the order of
@@ -961,7 +961,7 @@ class SentencizerAutoDownloadTest(unittest.TestCase):
     fresh runner, since nothing upstream of it had called load_spacy() yet."""
 
     def test_get_sentencizer_downloads_the_model_if_missing(self):
-        from audiblez import core
+        from epubcast import core
         with mock.patch.object(core, '_sentencizer', None), \
              mock.patch.object(core, 'load_spacy') as load_spacy:
             core._get_sentencizer()
