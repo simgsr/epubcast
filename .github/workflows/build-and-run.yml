@@ -57,6 +57,7 @@ jobs:
           python test/test_power.py
           python test/test_imports.py
           python test/test_cli.py
+          python test/test_find_chapters.py
       - name: Download test epub
         run: curl -sSL -o book.epub "$TEST_EPUB_URL"
       - name: Create audiobook
@@ -136,6 +137,7 @@ jobs:
           python test/test_power.py
           python test/test_imports.py
           python test/test_cli.py
+          python test/test_find_chapters.py
       - name: Download test epub
         run: curl -sSL -o book.epub "$TEST_EPUB_URL"
       - name: Create audiobook
@@ -144,3 +146,22 @@ jobs:
         run: |
           ls -lah audiobooks/book.m4b
           test -s audiobooks/book.m4b
+
+  # `pip install .` resolves from version ranges, so a fresh environment drifts as upstream
+  # releases. poetry.lock is the only pinned environment in the repo, and nothing installed
+  # from it before this job: it could go stale for months without a single test noticing.
+  # Checking the content-hash is enough to keep it honest, and cheap enough to run always.
+  lock-in-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install poetry
+        run: pip install poetry
+      - name: Confirm poetry.lock matches pyproject.toml
+        run: poetry check --lock
+

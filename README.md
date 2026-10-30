@@ -66,6 +66,27 @@ That file mirrors `pyproject.toml`: it has the core dependencies (which include 
 the `[edge]` extra, so `edge-tts` is installed too. (The `[gui]` extra is left out; add it
 with `pip install ".[gui]"` if you want the desktop UI.)
 
+### Reproducible installs
+
+`pip install .` and `requirements.txt` both resolve from version *ranges*, so two installs a
+few weeks apart can land on different versions — newer `spacy`, newer `torch`, a different
+`mlx-audio`. When you need the same environment twice, install from `poetry.lock`, which pins
+every transitive package:
+
+```bash
+pip install poetry
+poetry install          # reads poetry.lock, not the ranges
+```
+
+CI runs `poetry check --lock`, so a `pyproject.toml` change that was not carried into the lock
+fails the build instead of drifting quietly. `.python-version` pins the interpreter at 3.12.
+
+Model weights are pinned too. The MLX engine is loaded at a fixed upstream commit, so a
+Hugging Face repo update cannot change the audio under unchanged code; `--repo-id` overrides
+the repo and then floats again. The **torch** engine cannot be pinned this way — `kokoro`
+0.9.4 exposes no revision parameter — so its weights track `hexgrad/Kokoro-82M`, which has not
+changed since April 2025.
+
 To also get the **Edge backend** — Microsoft's online neural voices, including real
 Cantonese and native traditional-script reading — add the extra:
 
