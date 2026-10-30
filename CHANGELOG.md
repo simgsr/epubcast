@@ -58,6 +58,10 @@
 
 ### Fixed
 
+- The Linux CI job had been failing on every push for four runs, before any Python was
+  installed: the pinned FFmpeg autobuild tag (`autobuild-2026-08-19-19-21`) had been pruned
+  by upstream, so the download 404'd. Re-pinned to a tag that exists, with the hash taken
+  from BtbN's own `checksums.sha256` and cross-checked against the downloaded archive.
 - **The Edge backend could not synthesize a single word.** `edge-tts` 7.2.x sends
   `Sec-MS-GEC-Version: 1-...` on the websocket handshake, which the service now answers with
   `403 Invalid response status` on every request, so `Preview` failed after its four retries
