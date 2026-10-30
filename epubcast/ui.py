@@ -2,8 +2,6 @@
 # -*- coding: utf-8 -*-
 # A simple wxWidgets UI for epubcast
 
-import numpy as np
-import soundfile
 import threading
 import platform
 import subprocess
@@ -14,12 +12,12 @@ import wx
 from wx.lib.newevent import NewEvent
 from wx.lib.scrolledpanel import ScrolledPanel
 from PIL import Image
-from tempfile import NamedTemporaryFile
 
 from epubcast import DEFAULT_OUTPUT_FOLDER
+from epubcast import preview
 from epubcast.backends import edge_available, mlx_available, resolve_backend, torch_available
-from epubcast.voices import (voices, flags, edge_voices, edge_flags, lang_code_for,
-                             default_languages, is_catalog_voice)
+from epubcast.voices import (voices, flags, edge_voices, edge_flags, language_name,
+                             lang_code_for, default_languages, is_catalog_voice)
 
 EVENTS = {
     'CORE_STARTED': NewEvent(),
@@ -34,9 +32,63 @@ EVENTS = {
 
 border = 5
 
+# One spacing scale for the whole window. Before this, gaps of 5 and 8 were picked per
+# control, so unrelated rows sat at slightly different distances and the eye read the
+# misalignment as sloppiness rather than as grouping.
+GAP = border
+SECTION_GAP = border * 2
+
+# The speed slider's range. Kokoro stays intelligible across this band and becomes uncanny
+# outside it, so the control does not offer what it cannot do well.
+SPEED_MIN = 0.5
+SPEED_MAX = 2.0
+
 # The pixel sizes in this file were picked on a 14" laptop; ui_scale stretches or shrinks
 # them so the same layout fits a small screen and still uses the room on a large one.
 REFERENCE_SCREEN_WIDTH = 1512
+
+
+def muted_colour():
+    """The system's own grey text, so helper lines stay legible in light and dark themes.
+
+    A hardcoded (110, 110, 110) read fine on the light theme it was chosen on and sat at
+    the edge of legibility the moment macOS switched to dark.
+    """
+    return wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT)
+
+
+def compact_number(value):
+    """A short form of a large count, for places too narrow for the exact figure.
+
+    The Book card sits in a side column where "1,384,632 characters" is wider than the space
+    it has; the footer states the exact number for the run being started.
+    """
+    if value >= 1_000_000:
+        return f'{value / 1_000_000:.1f}M'
+    if value >= 10_000:
+        return f'{value / 1_000:.0f}k'
+    return f'{value:,}'
+
+
+def make_card(parent, title):
+    """A titled section with exactly one border.
+
+    The child panel is parented to the StaticBox itself. Hanging it off the surrounding
+    panel instead is what makes wx warn that it "should be created as child of its
+    wxStaticBox", and is why these sections rendered with a doubled frame inside the box.
+    """
+    sizer = wx.StaticBoxSizer(wx.VERTICAL, parent, title)
+    panel = wx.Panel(sizer.GetStaticBox())
+    sizer.Add(panel, 1, wx.EXPAND | wx.ALL, GAP)
+    return sizer, panel
+
+
+def helper_text(parent, text, width):
+    """A wrapped, muted line of secondary explanation."""
+    label = wx.StaticText(parent, label=text)
+    label.SetForegroundColour(muted_colour())
+    label.Wrap(width)
+    return label
 
 
 def current_display():
@@ -61,6 +113,8 @@ class MainWindow(wx.Frame):
                          min(int(560 * shrink), self.work_area.height)))
         self.chapters_panel = None
         self.preview_threads = []
+        self.preview_process = None
+        self.preview_files = []
         self.selected_chapter = None
         self.selected_book = None
         self.synthesis_in_progress = False
@@ -73,10 +127,21 @@ class MainWindow(wx.Frame):
         self.Bind(EVENTS['CORE_FINISHED'][1], self.on_core_finished)
         self.Bind(EVENTS['CORE_FAILED'][1], self.on_core_failed)
 
+        # A single line of state along the bottom. The window is dense, and "what is selected
+        # right now" -- voice, chapters, total length -- was previously spread over three
+        # panels and never stated in one place.
+        self.CreateStatusBar(1)
+        self.set_status('Open an EPUB to begin.')
+
         self.create_menu()
         self.create_layout()
         self.centre_on_work_area()
         self.Show(True)
+
+    def set_status(self, text):
+        """Update the bottom status line."""
+        if self.GetStatusBar() is not None:
+            self.SetStatusText(text)
 
     def scaled(self, size):
         """A pixel size from the reference layout, adjusted for this screen."""
@@ -137,10 +202,10 @@ class MainWindow(wx.Frame):
         self.synth_panel.Layout()
 
     def on_core_chapter_started(self, event):
-        self.set_table_chapter_status(event.chapter_index, "⏳ In Progress")
+        self.set_table_chapter_status(event.chapter_index, "In progress…")
 
     def on_core_chapter_finished(self, event):
-        self.set_table_chapter_status(event.chapter_index, "✅ Done")
+        self.set_table_chapter_status(event.chapter_index, "Done")
         self.start_button.Show()
 
     def on_core_progress(self, event):
@@ -151,6 +216,7 @@ class MainWindow(wx.Frame):
 
     def on_core_finished(self, event):
         self.synthesis_in_progress = False
+        self.set_status('Finished — the .m4b is in the output folder.')
         self.open_folder_with_explorer(self.output_folder_text_ctrl.GetValue())
 
     def on_core_failed(self, event):
@@ -163,6 +229,7 @@ class MainWindow(wx.Frame):
         print(event.details)
         self.synthesis_in_progress = False
         self.re_enable_after_synthesis()
+        self.set_status('Synthesis failed.')
         wx.MessageBox(f'Synthesis failed:\n\n{event.message}\n\n'
                       'The full traceback is on the terminal.',
                       'Epubcast', wx.OK | wx.ICON_ERROR, self)
@@ -177,56 +244,117 @@ class MainWindow(wx.Frame):
         self.table.EnableCheckBoxes(True)
 
     def create_layout(self):
-        # Panels layout looks like this:
-        # splitter
-        #     splitter_left
-        #         chapters_panel
-        #     splitter_right
-        #         center_panel
-        #             text_area
-        #         right_panel
-        #             book_info_panel_box
-        #                 book_info_panel
-        #                     cover_bitmap
-        #                     book_details_panel
-        #             param_panel_box
-        #                  param_panel
-        #                      ...
-        #             synth_panel_box
-        #                  synth_panel
-        #                      start_button
-        #                      ...
+        # Layout, top to bottom:
+        #   top bar        [Open EPUB] [About] ................ backend in use
+        #   content host   the welcome panel, until a book is opened, then:
+        #       splitter
+        #           splitter_left   chapters table
+        #           splitter_right  text editor | settings column
+        #                               settings column = scrolling cards + fixed footer
+        #   status bar     what is selected right now
+        self.main_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.SetSizer(self.main_sizer)
+        self.main_sizer.Add(self.create_top_bar(), 0, wx.EXPAND | wx.ALL, GAP)
 
+        # The host swaps the welcome panel for the working layout in place, so opening a
+        # book does not mean building a second window.
+        self.content_host = wx.Panel(self)
+        self.content_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.content_host.SetSizer(self.content_sizer)
+        self.main_sizer.Add(self.content_host, 1, wx.EXPAND)
+
+        self.splitter = wx.Panel(self.content_host)
+        self.splitter_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.splitter.SetSizer(self.splitter_sizer)
+
+        self.welcome_panel = self.create_welcome_panel(self.content_host)
+        self.content_sizer.Add(self.welcome_panel, 1, wx.EXPAND)
+
+    def create_top_bar(self):
+        """The always-present strip of app-level actions.
+
+        Emoji were doing duty as icons here, which reads as decoration rather than as
+        affordance; the labels carry the meaning, so they stand on their own.
+        """
         top_panel = wx.Panel(self)
         top_sizer = wx.BoxSizer(wx.HORIZONTAL)
         top_panel.SetSizer(top_sizer)
 
-        # Open Epub button
-        open_epub_button = wx.Button(top_panel, label="📁 Open EPUB")
+        open_epub_button = wx.Button(top_panel, label="Open EPUB…")
         open_epub_button.Bind(wx.EVT_BUTTON, self.on_open)
-        top_sizer.Add(open_epub_button, 0, wx.ALL, 5)
+        top_sizer.Add(open_epub_button, 0, wx.RIGHT, GAP)
 
-        # About button
-        help_button = wx.Button(top_panel, label="ℹ️ About")
+        help_button = wx.Button(top_panel, label="About")
         help_button.Bind(wx.EVT_BUTTON, lambda event: self.about_dialog())
-        top_sizer.Add(help_button, 0, wx.ALL, 5)
+        top_sizer.Add(help_button, 0, 0)
 
-        self.main_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.SetSizer(self.main_sizer)
+        top_sizer.AddStretchSpacer()
 
-        self.splitter = wx.Panel(self)
-        self.splitter_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.splitter.SetSizer(self.splitter_sizer)
+        # Which engine will actually run, stated once instead of only inside a dropdown.
+        self.engine_badge = wx.StaticText(top_panel, label='')
+        self.engine_badge.SetForegroundColour(muted_colour())
+        top_sizer.Add(self.engine_badge, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, GAP)
+        self.set_engine_badge('auto')
+        return top_panel
 
-        self.main_sizer.Add(top_panel, 0, wx.ALL | wx.EXPAND, 5)
-        self.main_sizer.Add(self.splitter, 1, wx.EXPAND)
+    def set_engine_badge(self, backend):
+        """Name the engine 'auto' resolves to, so the badge never says 'auto'."""
+        resolved = resolve_backend(backend)
+        detail = {'torch': 'PyTorch', 'mlx': 'MLX (Apple GPU)', 'edge': 'Microsoft Edge (online)'}
+        self.engine_badge.SetLabel(f'Engine: {detail.get(resolved, resolved)}')
+        self.engine_badge.GetParent().Layout()
+
+    def create_welcome_panel(self, parent):
+        """What the window says before a book is open.
+
+        It used to say nothing: a blank grey frame with two buttons in the corner, which
+        read as a broken app rather than as an invitation.
+        """
+        panel = wx.Panel(parent)
+        outer = wx.BoxSizer(wx.VERTICAL)
+        panel.SetSizer(outer)
+        outer.AddStretchSpacer()
+
+        title = wx.StaticText(panel, label='Turn an EPUB into a chaptered audiobook')
+        title.SetFont(wx.Font(self.scaled(20), wx.DEFAULT, wx.NORMAL, wx.BOLD))
+        outer.Add(title, 0, wx.ALIGN_CENTER_HORIZONTAL)
+        outer.Add(helper_text(
+            panel,
+            'Open an EPUB, choose the chapters and a voice, then start. Audio is written '
+            'to the output folder as one chaptered .m4b file.',
+            self.scaled(520)), 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP, GAP)
+
+        open_button = wx.Button(panel, label='Open EPUB…', size=(self.scaled(180), self.scaled(36)))
+        open_button.Bind(wx.EVT_BUTTON, self.on_open)
+        open_button.SetDefault()
+        outer.Add(open_button, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP, SECTION_GAP)
+
+        hint = helper_text(panel, 'You can also drop a file on the window, or press ⌘O.',
+                           self.scaled(520))
+        outer.Add(hint, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP, GAP)
+        outer.AddStretchSpacer()
+        return panel
+
+    def show_working_layout(self):
+        """Swap the welcome panel for the chapter/editor/settings layout."""
+        if self.welcome_panel is None:
+            return
+        self.welcome_panel.Hide()
+        self.content_sizer.Detach(self.welcome_panel)
+        self.welcome_panel.Destroy()
+        self.welcome_panel = None
+        self.content_sizer.Add(self.splitter, 1, wx.EXPAND)
 
     def create_layout_for_ebook(self, splitter):
+        self.show_working_layout()
         splitter_left = wx.Panel(splitter, -1)
         splitter_right = wx.Panel(self.splitter)
         self.splitter_left, self.splitter_right = splitter_left, splitter_right
-        self.splitter_sizer.Add(splitter_left, 1, wx.ALL | wx.EXPAND, 5)
-        self.splitter_sizer.Add(splitter_right, 2, wx.ALL | wx.EXPAND, 5)
+        # 3:5 to the working area, then 5:4 inside it. The settings cards are the density
+        # limit here -- at a narrower column their controls overflowed the card edge -- while
+        # the chapter names only lose a few characters.
+        self.splitter_sizer.Add(splitter_left, 3, wx.EXPAND | wx.ALL, GAP)
+        self.splitter_sizer.Add(splitter_right, 5, wx.EXPAND | wx.ALL, GAP)
 
         self.left_sizer = wx.BoxSizer(wx.VERTICAL)
         splitter_left.SetSizer(self.left_sizer)
@@ -246,23 +374,25 @@ class MainWindow(wx.Frame):
 
         self.chapter_label = wx.StaticText(self.center_panel)
         self.set_chapter_label(self.selected_chapter)
-        preview_button = wx.Button(self.center_panel, label="🔊 Preview")
+        preview_button = wx.Button(self.center_panel, label="Preview chapter")
+        preview_button.SetToolTip('Hear the text in this box read aloud with the selected voice')
         preview_button.Bind(wx.EVT_BUTTON, self.on_preview_chapter)
 
-        self.center_sizer.Add(self.chapter_label, 0, wx.ALL, 5)
-        self.center_sizer.Add(preview_button, 0, wx.ALL, 5)
-        self.center_sizer.Add(self.text_area, 1, wx.ALL | wx.EXPAND, 5)
+        self.center_sizer.Add(self.chapter_label, 0, wx.BOTTOM, GAP)
+        self.center_sizer.Add(preview_button, 0, wx.BOTTOM, GAP)
+        self.center_sizer.Add(self.text_area, 1, wx.EXPAND)
 
         splitter_right_sizer = wx.BoxSizer(wx.HORIZONTAL)
         splitter_right.SetSizer(splitter_right_sizer)
 
         self.create_right_panel(splitter_right)
-        splitter_right_sizer.Add(self.center_panel, 1, wx.ALL | wx.EXPAND, 5)
-        splitter_right_sizer.Add(self.right_panel, 1, wx.ALL | wx.EXPAND, 5)
+        splitter_right_sizer.Add(self.center_panel, 5, wx.EXPAND | wx.RIGHT, GAP)
+        splitter_right_sizer.Add(self.right_panel, 4, wx.EXPAND)
 
     def set_chapter_label(self, chapter):
         """Long section names wrap: as a single line they widen the whole centre column."""
-        self.chapter_label.SetLabel(f'Edit / Preview content for section "{chapter.short_name}":')
+        self.chapter_label.SetLabel(f'Section "{chapter.short_name}"')
+        self.chapter_label.SetFont(wx.Font(self.scaled(13), wx.DEFAULT, wx.NORMAL, wx.BOLD))
         self.chapter_label.Wrap(max(self.scaled(260), self.center_panel.GetSize().width - 4 * border))
         self.center_panel.Layout()
 
@@ -274,104 +404,106 @@ class MainWindow(wx.Frame):
         wx.MessageBox(msg, "Epubcast")
 
     def create_right_panel(self, splitter_right):
-        self.right_panel = ScrolledPanel(splitter_right, style=wx.TAB_TRAVERSAL)
+        """The settings column: scrolling cards above, a footer that never scrolls below.
+
+        The Start button used to live inside the scrolling area, so in any window shorter
+        than the full layout -- which is most of them -- the primary action of the whole app
+        sat below the fold, with nothing on screen to suggest scrolling would reveal it.
+        """
+        self.right_panel = wx.Panel(splitter_right)
+        column = wx.BoxSizer(wx.VERTICAL)
+        self.right_panel.SetSizer(column)
+
+        self.right_cards = ScrolledPanel(self.right_panel, style=wx.TAB_TRAVERSAL)
         self.right_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.right_panel.SetSizer(self.right_sizer)
-
-        self.book_info_panel_box = wx.Panel(self.right_panel, style=wx.SUNKEN_BORDER)
-        book_info_panel_box_sizer = wx.StaticBoxSizer(wx.VERTICAL, self.book_info_panel_box, "Book Details")
-        self.book_info_panel_box.SetSizer(book_info_panel_box_sizer)
-        # Proportion 0: a wx.BoxSizer sizes stretchable children alike, so three boxes at
-        # proportion 1 asked for three times the tallest one's height and overflowed.
-        self.right_sizer.Add(self.book_info_panel_box, 0, wx.ALL | wx.EXPAND, border)
-
-        self.book_info_panel = wx.Panel(self.book_info_panel_box, style=wx.BORDER_NONE)
-        self.book_info_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.book_info_panel.SetSizer(self.book_info_sizer)
-        book_info_panel_box_sizer.Add(self.book_info_panel, 1, wx.ALL | wx.EXPAND, border)
-
-        # Add cover image
-        self.cover_bitmap = wx.StaticBitmap(self.book_info_panel, -1)
-        self.book_info_sizer.Add(self.cover_bitmap, 0, wx.ALL, 5)
-
-        self.cover_bitmap.Refresh()
-        self.book_info_panel.Refresh()
-        self.book_info_panel.Layout()
-        self.cover_bitmap.Layout()
+        self.right_cards.SetSizer(self.right_sizer)
+        column.Add(self.right_cards, 1, wx.EXPAND)
+        # One widget to disable for the length of a run, as before: every settings card.
+        self.params_panel = self.right_cards
 
         self.create_book_details_panel()
-        self.create_params_panel()
+        self.create_engine_card()
+        self.create_voice_card()
+        self.create_output_card()
+        self.right_cards.SetupScrolling(scroll_x=False, scroll_y=True, scrollToTop=False)
+
         self.create_synthesis_panel()
-        # The parameters are the tallest thing in the window: on a short screen, or in a
-        # window the user has shrunk, this column scrolls rather than losing the Start
-        # button off the bottom or the controls off the side.
-        self.right_panel.SetupScrolling(scroll_x=True, scroll_y=True, scrollToTop=False)
+        column.Add(self.synth_panel_box, 0, wx.EXPAND | wx.TOP, GAP)
 
     def create_book_details_panel(self):
-        book_details_panel = wx.Panel(self.book_info_panel)
-        book_details_sizer = wx.GridBagSizer(self.scaled(8), self.scaled(8))
-        book_details_panel.SetSizer(book_details_sizer)
-        self.book_info_sizer.Add(book_details_panel, 1, wx.ALL | wx.EXPAND, border)
+        card, panel = make_card(self.right_cards, "Book")
+        self.right_sizer.Add(card, 0, wx.EXPAND | wx.ALL, GAP)
+        self.book_info_panel = panel
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        panel.SetSizer(row)
 
-        def add_row(row, label, value):
+        self.cover_bitmap = wx.StaticBitmap(panel, -1)
+        row.Add(self.cover_bitmap, 0, wx.RIGHT, GAP)
+
+        details = wx.Panel(panel)
+        grid = wx.GridBagSizer(GAP, GAP)
+        details.SetSizer(grid)
+        row.Add(details, 1, wx.EXPAND)
+
+        def add_row(index, label, value):
             """A label and a value that ellipsizes.
 
             Laid out at its natural width a long title made this box the widest thing in the
             window, which stretched the whole right column and squeezed the chapter list.
             """
-            label_text = wx.StaticText(book_details_panel, label=label)
-            book_details_sizer.Add(label_text, pos=(row, 0), flag=wx.ALL, border=border)
-            value_text = wx.StaticText(book_details_panel, label=value, style=wx.ST_ELLIPSIZE_END)
+            label_text = wx.StaticText(details, label=label)
+            label_text.SetForegroundColour(muted_colour())
+            grid.Add(label_text, pos=(index, 0), flag=wx.ALIGN_TOP)
+            value_text = wx.StaticText(details, label=value, style=wx.ST_ELLIPSIZE_END)
             value_text.SetMinSize((self.scaled(95), -1))
             value_text.SetToolTip(value)
-            book_details_sizer.Add(value_text, pos=(row, 1), flag=wx.ALL | wx.EXPAND, border=border)
+            grid.Add(value_text, pos=(index, 1), flag=wx.EXPAND)
 
-        if not hasattr(self, 'document_chapters'):
-            total_len = 0
-        else:
-            total_len = sum([len(c.extracted_text) for c in self.document_chapters])
+        total_len = sum(len(c.extracted_text) for c in getattr(self, 'document_chapters', []))
+        add_row(0, "Title", self.selected_book_title)
+        add_row(1, "Author", self.selected_book_author)
+        add_row(2, "Length", f'{compact_number(total_len)} characters')
+        grid.AddGrowableCol(1)
 
-        add_row(0, "Title:", self.selected_book_title)
-        add_row(1, "Author:", self.selected_book_author)
-        add_row(2, "Total Length:", f'{total_len:,} characters')
-        book_details_sizer.AddGrowableCol(1)
+    def field_label(self, parent, text):
+        """A small muted label above a control.
 
-    def create_params_panel(self):
-        panel_box = wx.Panel(self.right_panel, style=wx.SUNKEN_BORDER)
-        panel_box_sizer = wx.StaticBoxSizer(wx.VERTICAL, panel_box, "Audiobook Parameters")
-        panel_box.SetSizer(panel_box_sizer)
+        Labels sit above their controls rather than beside them: in a column this narrow a
+        label column stole ~70px from every row, which is what pushed the Preview button and
+        the sample dropdown off the right edge of their cards.
+        """
+        label = wx.StaticText(parent, label=text)
+        label.SetForegroundColour(muted_colour())
+        return label
 
-        panel = self.params_panel = wx.Panel(panel_box)
-        panel_box_sizer.Add(panel, 1, wx.ALL | wx.EXPAND, border)
-        self.right_sizer.Add(panel_box, 1, wx.ALL | wx.EXPAND, border)
-        sizer = wx.GridBagSizer(self.scaled(8), self.scaled(8))
+    def create_engine_card(self):
+        card, panel = make_card(self.right_cards, "Engine")
+        self.right_sizer.Add(card, 0, wx.EXPAND | wx.ALL, GAP)
+        sizer = wx.BoxSizer(wx.VERTICAL)
         panel.SetSizer(sizer)
 
         # Backend: which TTS engine runs. MLX is Apple Silicon only and much faster.
-        backend_label = wx.StaticText(panel, label="Backend:")
         self.selected_backend = 'auto'
         backend_choices = ['auto'] + (['mlx'] if mlx_available() else []) + \
                           (['torch'] if torch_available() else []) + \
                           (['edge'] if edge_available() else [])
-        backend_dropdown = wx.ComboBox(panel, choices=backend_choices, value='auto', style=wx.CB_READONLY)
-        backend_dropdown.Bind(wx.EVT_COMBOBOX, self.on_select_backend)
-        sizer.Add(backend_label, pos=(0, 0), flag=wx.ALL, border=border)
-        sizer.Add(backend_dropdown, pos=(0, 1), flag=wx.ALL, border=border)
+        sizer.Add(self.field_label(panel, "Backend"), 0, wx.BOTTOM, 2)
+        self.backend_dropdown = wx.ComboBox(panel, choices=backend_choices, value='auto',
+                                            style=wx.CB_READONLY)
+        self.backend_dropdown.Bind(wx.EVT_COMBOBOX, self.on_select_backend)
+        sizer.Add(self.backend_dropdown, 0, wx.EXPAND)
 
         resolved = resolve_backend('auto')
         if torch_available():
-            backend_note = f'"auto" uses the torch backend (portable)'
+            backend_note = '"auto" uses PyTorch.'
         elif mlx_available():
-            backend_note = 'torch not installed — "auto" will use mlx'
+            backend_note = 'torch missing — "auto" uses MLX.'
         else:
-            backend_note = f'"auto" will use {resolved}'
-        self.backend_note = wx.StaticText(panel, label=backend_note)
-        self.backend_note.SetForegroundColour(wx.Colour(110, 110, 110))
-        self.backend_note.Wrap(self.scaled(200))
-        sizer.Add(self.backend_note, pos=(1, 1), flag=wx.ALL, border=border)
+            backend_note = f'"auto" will use {resolved}.'
+        self.backend_note = helper_text(panel, backend_note, self.scaled(240))
+        sizer.Add(self.backend_note, 0, wx.EXPAND | wx.TOP, 2)
 
         # Device only affects the torch backend; MLX always runs on the Apple GPU.
-        self.device_label = wx.StaticText(panel, label="Torch device:")
         engine_radio_panel = self.device_panel = wx.Panel(panel)
         cpu_radio = wx.RadioButton(engine_radio_panel, label="CPU", style=wx.RB_GROUP)
         cuda_radio = self.cuda_radio = wx.RadioButton(engine_radio_panel, label="CUDA")
@@ -384,96 +516,139 @@ class MainWindow(wx.Frame):
                 cuda_radio.SetValue(True)
             cpu_radio.Bind(wx.EVT_RADIOBUTTON, lambda event: torch.set_default_device('cpu'))
             cuda_radio.Bind(wx.EVT_RADIOBUTTON, lambda event: torch.set_default_device('cuda'))
-        sizer.Add(self.device_label, pos=(2, 0), flag=wx.ALL, border=border)
-        sizer.Add(engine_radio_panel, pos=(2, 1), flag=wx.ALL, border=border)
-        engine_radio_panel_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        engine_radio_panel.SetSizer(engine_radio_panel_sizer)
-        engine_radio_panel_sizer.Add(cpu_radio, 0, wx.ALL, 5)
-        engine_radio_panel_sizer.Add(cuda_radio, 0, wx.ALL, 5)
+        radio_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        engine_radio_panel.SetSizer(radio_sizer)
+        radio_sizer.Add(cpu_radio, 0, wx.RIGHT, GAP)
+        radio_sizer.Add(cuda_radio, 0)
+        self.device_label = self.field_label(panel, "Device")
+        sizer.Add(self.device_label, 0, wx.TOP | wx.BOTTOM, GAP)
+        sizer.Add(engine_radio_panel, 0, wx.EXPAND)
+
         self.update_device_row()
+
+    def create_voice_card(self):
+        card, panel = make_card(self.right_cards, "Voice")
+        self.right_sizer.Add(card, 0, wx.EXPAND | wx.ALL, GAP)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        panel.SetSizer(sizer)
 
         # Languages: multi-select, so the voice dropdown only shows the languages you care
         # about. The list depends on the backend (Kokoro codes vs Edge locales).
-        language_label = wx.StaticText(panel, label="Languages:")
-        self.language_listbox = wx.CheckListBox(panel, size=(self.scaled(180), self.scaled(110)))
+        sizer.Add(self.field_label(panel, "Languages"), 0, wx.BOTTOM, 2)
+        self.language_listbox = wx.CheckListBox(panel, size=(-1, self.scaled(74)))
         self.language_listbox.Bind(wx.EVT_CHECKLISTBOX, self.on_select_languages)
-        sizer.Add(language_label, pos=(3, 0), flag=wx.ALL, border=border)
-        sizer.Add(self.language_listbox, pos=(3, 1), flag=wx.ALL | wx.EXPAND, border=border)
+        sizer.Add(self.language_listbox, 0, wx.EXPAND)
 
-        voice_label = wx.StaticText(panel, label="Voice:")
+        sizer.Add(self.field_label(panel, "Voice"), 0, wx.TOP | wx.BOTTOM, GAP)
         self.selected_voice = ''
         # Editable: a voice can also be a blend ("af_heart,af_bella"), a path to a .pt
         # pack, or an Edge voice name typed in full.
         self.voice_dropdown = wx.ComboBox(panel, choices=[], value='')
+        self.voice_dropdown.SetToolTip('Blend voices with commas, or type a path to a .pt pack')
         self.voice_dropdown.Bind(wx.EVT_COMBOBOX, self.on_select_voice)
         self.voice_dropdown.Bind(wx.EVT_TEXT, self.on_select_voice)
-        sizer.Add(voice_label, pos=(4, 0), flag=wx.ALL, border=border)
-        sizer.Add(self.voice_dropdown, pos=(4, 1), flag=wx.ALL | wx.EXPAND, border=border)
+        sizer.Add(self.voice_dropdown, 0, wx.EXPAND)
 
-        voice_note = wx.StaticText(panel, label='Blend voices with commas, or type a path to a .pt voice')
-        voice_note.SetForegroundColour(wx.Colour(110, 110, 110))
-        voice_note.Wrap(self.scaled(200))
-        sizer.Add(voice_note, pos=(5, 1), flag=wx.ALL, border=border)
+        # Auditioning a voice next to the control that chooses it: picking by name alone
+        # means committing a multi-hour run to a voice nobody has heard.
+        self.preview_button = wx.Button(panel, label="Preview")
+        self.preview_button.SetToolTip('Hear this voice read a short sample')
+        self.preview_button.Bind(wx.EVT_BUTTON, self.on_preview_voice)
+        self.sample_dropdown = wx.ComboBox(panel, choices=list(preview.SAMPLE_MODES),
+                                           value=preview.MODE_AUTO, style=wx.CB_READONLY)
+        self.sample_dropdown.SetToolTip('What the preview reads. Auto follows the selected voice.')
+        preview_row = wx.BoxSizer(wx.HORIZONTAL)
+        preview_row.Add(self.preview_button, 0, wx.RIGHT, GAP)
+        preview_row.Add(self.sample_dropdown, 1, wx.EXPAND)
+        sizer.Add(preview_row, 0, wx.EXPAND | wx.TOP, GAP)
 
-        # Add dropdown for speed
-        speed_label = wx.StaticText(panel, label="Speed:")
-        speed_text_input = wx.TextCtrl(panel, value="1.0")
-        self.selected_speed = '1.0'
-        speed_text_input.Bind(wx.EVT_TEXT, self.on_select_speed)
-        sizer.Add(speed_label, pos=(6, 0), flag=wx.ALL, border=border)
-        sizer.Add(speed_text_input, pos=(6, 1), flag=wx.ALL, border=border)
+        self.rebuild_languages()
+
+    def create_output_card(self):
+        card, panel = make_card(self.right_cards, "Output")
+        self.right_sizer.Add(card, 0, wx.EXPAND | wx.ALL, GAP)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        panel.SetSizer(sizer)
+
+        # Speed is a slider, not a text box. Free text meant a stray keystroke raised
+        # ValueError inside the change handler, and the app then refused to start a run for
+        # reasons it never showed anywhere.
+        sizer.Add(self.field_label(panel, "Speed"), 0, wx.BOTTOM, 2)
+        self.speed_slider = wx.Slider(panel, value=100, minValue=int(SPEED_MIN * 100),
+                                      maxValue=int(SPEED_MAX * 100),
+                                      style=wx.SL_HORIZONTAL | wx.SL_SELRANGE)
+        self.speed_slider.Bind(wx.EVT_SLIDER, self.on_select_speed)
+        self.speed_value_label = wx.StaticText(panel, label='1.00×',
+                                               size=(self.scaled(46), -1))
+        speed_row = wx.BoxSizer(wx.HORIZONTAL)
+        speed_row.Add(self.speed_slider, 1, wx.EXPAND | wx.RIGHT, GAP)
+        speed_row.Add(self.speed_value_label, 0, wx.ALIGN_CENTER_VERTICAL)
+        sizer.Add(speed_row, 0, wx.EXPAND)
 
         # Add file dialog selector to select output folder
-        output_folder_label = wx.StaticText(panel, label="Output Folder:")
+        sizer.Add(self.field_label(panel, "Folder"), 0, wx.TOP | wx.BOTTOM, GAP)
         default_output = os.path.abspath(DEFAULT_OUTPUT_FOLDER)
         os.makedirs(default_output, exist_ok=True)
         self.output_folder_text_ctrl = wx.TextCtrl(panel, value=default_output)
         self.output_folder_text_ctrl.SetEditable(False)
         # Without a minimum the control asks to be as wide as the whole path, which is what
         # used to push the parameters column past the edge of the screen.
-        self.output_folder_text_ctrl.SetMinSize((self.scaled(150), -1))
+        self.output_folder_text_ctrl.SetMinSize((self.scaled(120), -1))
         self.output_folder_text_ctrl.SetToolTip(default_output)
-        output_folder_button = wx.Button(panel, label="📂 Select")
+        output_folder_button = wx.Button(panel, label="Choose…")
         output_folder_button.Bind(wx.EVT_BUTTON, self.open_output_folder_dialog)
-        sizer.Add(output_folder_label, pos=(7, 0), flag=wx.ALL, border=border)
-        sizer.Add(self.output_folder_text_ctrl, pos=(7, 1), flag=wx.ALL | wx.EXPAND, border=border)
-        sizer.Add(output_folder_button, pos=(8, 1), flag=wx.ALL, border=border)
-
-        # Only valid once the cells exist: the controls take any spare width, the labels
-        # keep theirs.
-        sizer.AddGrowableCol(1)
-
-        self.rebuild_languages()
+        folder_row = wx.BoxSizer(wx.HORIZONTAL)
+        folder_row.Add(self.output_folder_text_ctrl, 1, wx.EXPAND | wx.RIGHT, GAP)
+        folder_row.Add(output_folder_button, 0)
+        sizer.Add(folder_row, 0, wx.EXPAND)
 
     def create_synthesis_panel(self):
-        panel_box = wx.Panel(self.right_panel, style=wx.SUNKEN_BORDER)
-        panel_box_sizer = wx.StaticBoxSizer(wx.VERTICAL, panel_box, "Audiobook Generation Status")
-        panel_box.SetSizer(panel_box_sizer)
+        """The footer: the primary action, always on screen, plus run progress."""
+        self.synth_panel_box = wx.Panel(self.right_panel)
+        box_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.synth_panel_box.SetSizer(box_sizer)
 
-        panel = self.synth_panel = wx.Panel(panel_box)
-        panel_box_sizer.Add(panel, 1, wx.ALL | wx.EXPAND, border)
-        self.right_sizer.Add(panel_box, 0, wx.ALL | wx.EXPAND, border)
+        panel = self.synth_panel = wx.Panel(self.synth_panel_box)
+        box_sizer.Add(panel, 1, wx.EXPAND)
         sizer = wx.BoxSizer(wx.VERTICAL)
         panel.SetSizer(sizer)
 
-        # Add Start button
-        self.start_button = wx.Button(panel, label="🚀 Start Audiobook Synthesis")
+        self.start_button = wx.Button(panel, label="Start synthesis",
+                                      size=(-1, self.scaled(36)))
+        self.start_button.SetFont(wx.Font(self.scaled(14), wx.DEFAULT, wx.NORMAL, wx.BOLD))
         self.start_button.Bind(wx.EVT_BUTTON, self.on_start)
-        sizer.Add(self.start_button, 0, wx.ALL, 5)
+        sizer.Add(self.start_button, 0, wx.EXPAND | wx.BOTTOM, GAP)
 
-        # Add Progress Bar label:
+        # How much is about to be synthesized, stated before the run rather than discovered
+        # from a progress bar afterwards.
+        self.selection_summary = wx.StaticText(panel, label='')
+        self.selection_summary.SetForegroundColour(muted_colour())
+        sizer.Add(self.selection_summary, 0, wx.BOTTOM, GAP)
+
         self.progress_bar_label = wx.StaticText(panel, label="Synthesis Progress:")
-        sizer.Add(self.progress_bar_label, 0, wx.ALL, 5)
         self.progress_bar = wx.Gauge(panel, range=100, style=wx.GA_PROGRESS)
-        self.progress_bar.SetMinSize((-1, self.scaled(26)))
-        sizer.Add(self.progress_bar, 0, wx.ALL | wx.EXPAND, 5)
-        self.progress_bar_label.Hide()
-        self.progress_bar.Hide()
-
-        # Add ETA Label
+        self.progress_bar.SetMinSize((-1, self.scaled(22)))
         self.eta_label = wx.StaticText(panel, label="Estimated Time Remaining: ")
-        self.eta_label.Hide()
-        sizer.Add(self.eta_label, 0, wx.ALL, 5)
+        sizer.Add(self.progress_bar_label, 0, wx.BOTTOM, 2)
+        sizer.Add(self.progress_bar, 0, wx.EXPAND | wx.BOTTOM, GAP)
+        sizer.Add(self.eta_label, 0)
+        for hidden in (self.progress_bar_label, self.progress_bar, self.eta_label):
+            hidden.Hide()
+        self.update_selection_summary()
+
+    def update_selection_summary(self):
+        """Refresh the footer's one-line statement of what will be synthesized."""
+        if not hasattr(self, 'selection_summary'):
+            return
+        chapters = getattr(self, 'document_chapters', None)
+        if not chapters:
+            self.selection_summary.SetLabel('')
+            return
+        chosen = [c for c in chapters if c.is_selected]
+        characters = sum(len(c.extracted_text) for c in chosen)
+        self.selection_summary.SetLabel(
+            f'{len(chosen)} of {len(chapters)} chapters · {characters:,} characters')
+        self.selection_summary.GetParent().Layout()
 
     def open_output_folder_dialog(self, event):
         with wx.DirDialog(self, "Choose a directory:", style=wx.DD_DEFAULT_STYLE) as dialog:
@@ -491,6 +666,7 @@ class MainWindow(wx.Frame):
         self.selected_backend = event.GetString()
         self.update_device_row()
         self.rebuild_languages()
+        self.set_engine_badge(self.selected_backend)
 
     def update_device_row(self):
         """The torch device radio is meaningless when MLX will actually run."""
@@ -505,9 +681,10 @@ class MainWindow(wx.Frame):
         return list(voices.keys())
 
     def language_label(self, backend, code):
+        """A language row that says what it is: flag, name, and the code the CLI uses."""
         if resolve_backend(backend) == 'edge':
-            return f'{edge_flags[code]} {code}'
-        return f'{flags[code]} {code}'
+            return f'{edge_flags[code]}  {language_name(code)}  ({code})'
+        return f'{flags[code]}  {language_name(code)}  ({code})'
 
     def rebuild_languages(self):
         """Repopulate the language listbox for the current backend, ticking the defaults."""
@@ -563,9 +740,9 @@ class MainWindow(wx.Frame):
         self.voice_dropdown.SetValue(display)
 
     def on_select_speed(self, event):
-        speed = float(event.GetString())
-        print('Selected speed', speed)
-        self.selected_speed = speed
+        self.selected_speed = self.speed_slider.GetValue() / 100
+        self.speed_value_label.SetLabel(f'{self.selected_speed:.2f}×')
+        self.set_status(f'Speed {self.selected_speed:.2f}× for the next run.')
 
     def open_epub(self, file_path):
         # Cleanup previous layout
@@ -595,14 +772,18 @@ class MainWindow(wx.Frame):
             chapter.is_selected = chapter in good_chapters
 
         self.create_layout_for_ebook(self.splitter)
+        # Show the first section straight away. The editor used to come up empty next to a
+        # label naming a section, which read as a rendering failure rather than as "nothing
+        # is selected yet".
+        self.text_area.SetValue(self.selected_chapter.extracted_text)
 
         # Update Cover
         cover = find_cover(book)
         if cover is not None:
             pil_image = Image.open(io.BytesIO(cover.content))
-            wx_img = wx.EmptyImage(pil_image.size[0], pil_image.size[1])
+            wx_img = wx.Image(pil_image.size[0], pil_image.size[1])
             wx_img.SetData(pil_image.convert("RGB").tobytes())
-            cover_h = self.scaled(170)
+            cover_h = self.scaled(104)
             cover_w = int(cover_h * pil_image.size[0] / pil_image.size[1])
             max_w = self.scaled(105)
             if cover_w > max_w:  # a landscape cover, which the old fixed max width squashed
@@ -613,15 +794,11 @@ class MainWindow(wx.Frame):
             self.cover_bitmap.SetMaxSize((cover_w, cover_h))
 
         chapters_panel = self.create_chapters_table_panel(good_chapters)
-
-        #  chapters_panel to left_sizer, or replace if it exists already
-        if self.chapters_panel:
-            self.left_sizer.Replace(self.chapters_panel, chapters_panel)
-            self.chapters_panel.Destroy()
-            self.chapters_panel = chapters_panel
-        else:
-            self.left_sizer.Add(chapters_panel, 1, wx.ALL | wx.EXPAND, 5)
-            self.chapters_panel = chapters_panel
+        # Always add: opening a second book rebuilds splitter_left and its sizer from
+        # scratch, so the previous panel was already destroyed with the old children and
+        # there is nothing left for Replace to find.
+        self.left_sizer.Add(chapters_panel, 1, wx.EXPAND)
+        self.chapters_panel = chapters_panel
 
         # These two are very important:
         self.splitter_left.Layout()
@@ -629,29 +806,40 @@ class MainWindow(wx.Frame):
         self.splitter.Layout()
         self.fit_to_work_area()
         self.resize_table_columns()
+        self.update_selection_summary()
+        self.set_status(f'{self.selected_book_title or "Book"} · {len(self.document_chapters)} sections '
+                        f'· {len(good_chapters)} selected')
 
     def on_table_checked(self, event):
         self.document_chapters[event.GetIndex()].is_selected = True
+        self.update_selection_summary()
 
     def on_table_unchecked(self, event):
         self.document_chapters[event.GetIndex()].is_selected = False
+        self.update_selection_summary()
 
     def on_table_selected(self, event):
         chapter = self.document_chapters[event.GetIndex()]
-        print('Selected', event.GetIndex(), chapter.short_name)
         self.selected_chapter = chapter
         self.text_area.SetValue(chapter.extracted_text)
         self.set_chapter_label(chapter)
+        self.set_status(f'Editing "{chapter.short_name}" · {len(chapter.extracted_text):,} characters')
 
     def create_chapters_table_panel(self, good_chapters):
-        panel = ScrolledPanel(self.splitter_left, -1, style=wx.TAB_TRAVERSAL | wx.SUNKEN_BORDER)
+        panel = ScrolledPanel(self.splitter_left, -1, style=wx.TAB_TRAVERSAL)
         sizer = wx.BoxSizer(wx.VERTICAL)
         panel.SetSizer(sizer)
 
-        self.table = table = wx.ListCtrl(panel, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
+        title_text = wx.StaticText(panel, label="Chapters")
+        title_text.SetFont(wx.Font(self.scaled(13), wx.DEFAULT, wx.NORMAL, wx.BOLD))
+        sizer.Add(title_text, 0, wx.BOTTOM, 2)
+        sizer.Add(helper_text(panel, 'Untick anything that should not be narrated.',
+                              self.scaled(260)), 0, wx.BOTTOM, GAP)
+
+        self.table = table = wx.ListCtrl(panel, style=wx.LC_REPORT)
         table.InsertColumn(0, "Included")
-        table.InsertColumn(1, "Chapter Name")
-        table.InsertColumn(2, "Chapter Length")
+        table.InsertColumn(1, "Chapter")
+        table.InsertColumn(2, "Characters")
         table.InsertColumn(3, "Status")
         table.SetMinSize((self.scaled(240), self.scaled(160)))
         table.Bind(wx.EVT_SIZE, self.on_table_resized)
@@ -665,9 +853,7 @@ class MainWindow(wx.Frame):
             table.Append(['', chapter.short_name, f"{len(chapter.extracted_text):,}"])
             if auto_selected: table.CheckItem(i)
 
-        title_text = wx.StaticText(panel, label=f"Select chapters to include in the audiobook:")
-        sizer.Add(title_text, 0, wx.ALL, 5)
-        sizer.Add(table, 1, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(table, 1, wx.EXPAND)
         return panel
 
     def on_table_resized(self, event):
@@ -682,7 +868,7 @@ class MainWindow(wx.Frame):
         width = table.GetClientSize().width
         if width <= 0:
             return
-        included_w, length_w, status_w = self.scaled(70), self.scaled(80), self.scaled(90)
+        included_w, length_w, status_w = self.scaled(74), self.scaled(88), self.scaled(96)
         name_w = max(self.scaled(90), width - included_w - length_w - status_w - border)
         for column, column_width in enumerate((included_w, name_w, length_w, status_w)):
             table.SetColumnWidth(column, column_width)
@@ -696,66 +882,125 @@ class MainWindow(wx.Frame):
         return voice
 
     def get_selected_speed(self):
-        return float(self.selected_speed)
+        return self.speed_slider.GetValue() / 100
 
     def on_preview_chapter(self, event):
-        lang_code = lang_code_for(self.get_selected_voice())
-        button = event.GetEventObject()
-        button.SetLabel("⏳")
+        """Read the text currently in the editor, so an edit can be heard before a run."""
+        text = preview.clip_text(self.text_area.GetValue(), limit=600)
+        if not text:
+            wx.MessageBox('This section has no text to read.', 'Epubcast',
+                          wx.OK | wx.ICON_INFORMATION, self)
+            return
+        self.start_preview([('Chapter', text)], event.GetEventObject(), 'the chapter')
+
+    def on_preview_voice(self, event):
+        """Audition the selected voice with a short sample, next to the voice selector."""
+        voice = self.get_selected_voice()
+        if not voice:
+            wx.MessageBox('Choose a voice first.', 'Epubcast',
+                          wx.OK | wx.ICON_INFORMATION, self)
+            return
+        segments = preview.sample_segments(voice, lang_code_for(voice), self.get_sample_mode(),
+                                           self.get_selected_chapter_text())
+        self.start_preview(segments, self.preview_button, f'a {voice} sample')
+
+    def get_sample_mode(self):
+        return self.sample_dropdown.GetValue() or preview.MODE_AUTO
+
+    def get_selected_chapter_text(self):
+        chapter = getattr(self, 'selected_chapter', None)
+        return getattr(chapter, 'extracted_text', '') if chapter is not None else ''
+
+    def start_preview(self, segments, button, description):
+        """Synthesize `segments` off the UI thread, then play them.
+
+        The preview threads are deliberately not joined from here. The previous version
+        joined every outstanding preview thread on the UI thread before starting the next,
+        so a second click froze the whole window until the first preview had finished
+        synthesizing -- which for a 300-character sample is several seconds.
+        """
+        if self.synthesis_in_progress:
+            self.set_status('Wait for the current synthesis to finish before previewing.')
+            return
+        voice = self.get_selected_voice()
+        lang_code = lang_code_for(voice)
+        backend = self.selected_backend
+        speed = self.get_selected_speed()
+        label = button.GetLabel()
+        button.SetLabel('Working…')
         button.Disable()
+        self.set_status(f'Preparing {description}…')
 
-        def restore_button():
-            button.SetLabel("🔊 Preview")
-            button.Enable()
-
-        def generate_preview():
-            import epubcast.core as core
-            from epubcast.backends import get_pipeline
+        def work():
             try:
-                # Same engine as the real run, or previews stop being representative.
-                core.set_espeak_library()
-                pipeline = get_pipeline(self.get_selected_voice(), lang_code=lang_code,
-                                        backend=self.selected_backend)
-                core.load_spacy()
-                text = self.selected_chapter.extracted_text[:300]
-                if len(text) == 0: return
-                audio_segments = core.gen_audio_segments(
-                    pipeline,
-                    text,
-                    voice=self.get_selected_voice(),
-                    speed=self.get_selected_speed(),
-                    lang_code=lang_code)
-                final_audio = np.concatenate(audio_segments)
-                tmp_preview_wav_file = NamedTemporaryFile(suffix='.wav', delete=False)
-                soundfile.write(tmp_preview_wav_file, final_audio, core.sample_rate)
-                cmd = ['ffplay', '-autoexit', '-nodisp', tmp_preview_wav_file.name]
-                subprocess.run(cmd)
-            except Exception as e:
+                audio = preview.render_preview(voice, lang_code, backend, speed, segments)
+                path = preview.write_preview_wav(audio)
+            except Exception as error:
                 traceback.print_exc()
-                wx.CallAfter(wx.MessageBox, f'Preview failed:\n\n{type(e).__name__}: {e}',
-                             'Epubcast', wx.OK | wx.ICON_ERROR)
+                wx.CallAfter(self.preview_failed, error)
+                return
             finally:
                 # wx widgets are only safe to touch from the main thread, and the button has
-                # to come back even when the preview raised -- otherwise it stays on "⏳"
-                # disabled, and previewing is dead for the rest of the session.
-                wx.CallAfter(restore_button)
+                # to come back even when the preview raised -- otherwise it stays disabled
+                # and previewing is dead for the rest of the session.
+                wx.CallAfter(self.restore_preview_button, button, label)
+            wx.CallAfter(self.play_preview, path, description)
 
-        if len(self.preview_threads) > 0:
-            for thread in self.preview_threads:
-                thread.join()
-            self.preview_threads = []
-        thread = threading.Thread(target=generate_preview)
+        thread = threading.Thread(target=work, daemon=True)
         thread.start()
-        self.preview_threads.append(thread)
+        self.preview_threads = [t for t in self.preview_threads if t.is_alive()] + [thread]
+
+    def restore_preview_button(self, button, label):
+        button.SetLabel(label)
+        button.Enable()
+
+    def preview_failed(self, error):
+        self.set_status('Preview failed.')
+        wx.MessageBox(f'Preview failed:\n\n{type(error).__name__}: {error}',
+                      'Epubcast', wx.OK | wx.ICON_ERROR, self)
+
+    def stop_preview_audio(self):
+        """Stop whatever preview is playing, so overlapping previews do not talk over each other."""
+        process, self.preview_process = self.preview_process, None
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+            except OSError:
+                pass
+
+    def play_preview(self, path, description):
+        self.stop_preview_audio()
+        for stale in self.preview_files:
+            try:
+                os.unlink(stale)
+            except OSError:
+                pass
+        self.preview_files = [path]
+        process = preview.play(path)
+        if process is None:
+            self.set_status('No audio player available for previews.')
+            wx.MessageBox('Could not find anything to play the preview with.\n\n'
+                          'Install ffmpeg (which provides ffplay) to hear previews.',
+                          'Epubcast', wx.OK | wx.ICON_WARNING, self)
+            return
+        self.preview_process = process
+        self.set_status(f'Playing {description}…')
 
     def on_start(self, event):
+        if not any(chapter.is_selected for chapter in self.document_chapters):
+            # Previously this started a run that produced nothing, after a long model load.
+            wx.MessageBox('Tick at least one chapter to include in the audiobook.', 'Epubcast',
+                          wx.OK | wx.ICON_INFORMATION, self)
+            return
         self.synthesis_in_progress = True
         file_path = self.selected_file_path
         voice = self.get_selected_voice()
-        speed = float(self.selected_speed)
+        speed = self.get_selected_speed()
         selected_chapters = [chapter for chapter in self.document_chapters if chapter.is_selected]
         self.start_button.Disable()
         self.params_panel.Disable()
+        self.stop_preview_audio()
+        self.set_status(f'Synthesizing {len(selected_chapters)} chapters with {voice}…')
 
         self.table.EnableCheckBoxes(False)
         for chapter_index, chapter in enumerate(self.document_chapters):

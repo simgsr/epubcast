@@ -1012,5 +1012,181 @@ class SentencizerAutoDownloadTest(unittest.TestCase):
         load_spacy.assert_called_once()
 
 
+class LanguageNameTest(unittest.TestCase):
+    """The language filter reads as a language list, not a column of codes."""
+
+    def test_kokoro_codes_get_names(self):
+        from epubcast.voices import language_name
+        self.assertEqual(language_name('a'), 'English (US)')
+        self.assertEqual(language_name('z'), 'Chinese')
+
+    def test_edge_locales_get_names(self):
+        from epubcast.voices import language_name
+        self.assertEqual(language_name('zh-TW'), 'Chinese (Traditional)')
+        self.assertEqual(language_name('zh-HK'), 'Cantonese')
+
+    def test_unknown_code_falls_back_to_the_code(self):
+        # Better a bare code than a blank row for a locale added without a name.
+        from epubcast.voices import language_name
+        self.assertEqual(language_name('xx-YY'), 'xx-YY')
+
+    def test_every_offered_code_has_a_name(self):
+        from epubcast.voices import (KOKORO_LANGUAGE_NAMES, EDGE_LANGUAGE_NAMES, edge_voices,
+                                     language_name, voices)
+        for code in list(voices) + list(edge_voices):
+            with self.subTest(code=code):
+                self.assertNotEqual(language_name(code), code,
+                                    f'{code} has no human name')
+        self.assertEqual(set(KOKORO_LANGUAGE_NAMES), set(voices))
+        self.assertEqual(set(EDGE_LANGUAGE_NAMES), set(edge_voices))
+
+
+def fake_kokoro(pipeline_calls, model_calls, spoken):
+    """A stub kokoro package: KPipeline and KModel record how they were built."""
+    kokoro = types.ModuleType('kokoro')
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            pipeline_calls.append(kwargs)
+            self.model = kwargs.get('model')
+
+        def __call__(self, text, voice, speed=1.0, split_pattern=None):
+            spoken.append(dict(text=text, voice=voice, speed=speed,
+                               split_pattern=split_pattern))
+            yield 'graphemes', 'phonemes', np.zeros(4, dtype=np.float32)
+
+    kokoro.KPipeline = FakePipeline
+
+    model_mod = types.ModuleType('kokoro.model')
+
+    class FakeKModel:
+        MODEL_NAMES = {'hexgrad/Kokoro-82M': 'kokoro-v1_0.pth'}
+
+        def __init__(self, repo_id=None, config=None, model=None):
+            model_calls.append(dict(repo_id=repo_id, config=config, model=model))
+            self.device = 'cpu'
+
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+    model_mod.KModel = FakeKModel
+    kokoro.model = model_mod
+    return {'kokoro': kokoro, 'kokoro.model': model_mod}
+
+
+def fake_hub(downloads, fail=False):
+    """A stub huggingface_hub recording each download and its revision."""
+    hub = types.ModuleType('huggingface_hub')
+
+    def hf_hub_download(repo_id, filename, revision=None):
+        if fail:
+            raise OSError('offline')
+        downloads.append(dict(repo_id=repo_id, filename=filename, revision=revision))
+        return f'/cache/{repo_id}/{filename}'
+
+    hub.hf_hub_download = hf_hub_download
+    return {'huggingface_hub': hub}
+
+
+class PinnedTorchPipelineTest(unittest.TestCase):
+    """The torch engine loads its weights at DEFAULT_REVISIONS, not the repo's branch.
+
+    kokoro exposes no revision argument, so this adapter resolves the config, the weights
+    and the voice pack itself and hands them to kokoro's own loader. These tests pin the
+    contract of that adapter without touching the network or downloading a model.
+    """
+
+    def build(self, repo_id=None, revision=None, fail_download=False, spoken=None):
+        spoken = spoken if spoken is not None else []
+        downloads, model_calls, pipeline_calls = [], [], []
+        modules = {**fake_kokoro(pipeline_calls, model_calls, spoken),
+                   **fake_hub(downloads, fail=fail_download)}
+        # Patched for the whole test, not just for construction: voice packs are resolved
+        # lazily on the first call, so a narrowed context would send that call to the real
+        # Hugging Face client.
+        patchers = [
+            mock.patch.dict(sys.modules, modules),
+            mock.patch('torch.load', side_effect=lambda path, **kw: np.zeros(3, dtype=np.float32)),
+            mock.patch('torch.stack', side_effect=lambda packs, dim=0: packs),
+            mock.patch('torch.mean', side_effect=lambda stacked, dim=0: np.zeros(3)),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        pipeline = backends.PinnedTorchPipeline('a', repo_id, revision)
+        return pipeline, downloads, model_calls, pipeline_calls
+
+    def test_default_repo_loads_at_the_pinned_commit(self):
+        pipeline, downloads, model_calls, _ = self.build()
+        self.assertEqual(pipeline.revision, backends.DEFAULT_REVISIONS['torch'])
+        for download in downloads:
+            self.assertEqual(download['revision'], backends.DEFAULT_REVISIONS['torch'])
+        self.assertEqual({d['filename'] for d in downloads},
+                         {'config.json', 'kokoro-v1_0.pth'})
+        # kokoro is handed local paths, which is what makes the revision stick.
+        self.assertEqual(model_calls[0]['config'], '/cache/hexgrad/Kokoro-82M/config.json')
+        self.assertEqual(model_calls[0]['model'], '/cache/hexgrad/Kokoro-82M/kokoro-v1_0.pth')
+
+    def test_an_explicit_revision_wins(self):
+        pinned = 'c' * 40
+        pipeline, downloads, _, _ = self.build(revision=pinned)
+        self.assertEqual(pipeline.revision, pinned)
+        self.assertTrue(all(d['revision'] == pinned for d in downloads))
+
+    def test_a_custom_repo_is_left_on_its_own_branch(self):
+        # DEFAULT_REVISIONS['torch'] names a commit in the default repo and would not
+        # resolve in a different one, so a caller-supplied repo must not inherit it.
+        pipeline, downloads, model_calls, pipeline_calls = self.build(repo_id='someone/Other-82M')
+        self.assertIsNone(pipeline.revision)
+        self.assertEqual(downloads, [])
+        self.assertEqual(model_calls, [])
+        self.assertEqual(pipeline_calls[0]['repo_id'], 'someone/Other-82M')
+
+    def test_a_failed_download_falls_back_instead_of_failing_the_run(self):
+        # Unpinned weights beat no audiobook, and the fallback says so out loud.
+        pipeline, _, model_calls, pipeline_calls = self.build(fail_download=True)
+        self.assertEqual(model_calls, [])
+        self.assertEqual(pipeline_calls[0]['repo_id'], backends.DEFAULT_REPOS['torch'])
+        self.assertNotIn('model', pipeline_calls[0])
+
+    def test_a_voice_name_is_fetched_at_the_pinned_commit(self):
+        spoken = []
+        pipeline, downloads, _, _ = self.build(spoken=spoken)
+        list(pipeline('Hello.', voice='af_sky'))
+        voice_downloads = [d for d in downloads if d['filename'].startswith('voices/')]
+        self.assertEqual(voice_downloads[0]['filename'], 'voices/af_sky.pt')
+        self.assertEqual(voice_downloads[0]['revision'], backends.DEFAULT_REVISIONS['torch'])
+        self.assertEqual(spoken[0]['text'], 'Hello.')
+
+    def test_a_local_pt_path_is_not_downloaded(self):
+        pipeline, downloads, _, _ = self.build()
+        list(pipeline('Hello.', voice='/voices/custom.pt'))
+        self.assertEqual([d for d in downloads if 'voices/' in d['filename']], [])
+
+    def test_a_blend_downloads_each_part_and_averages_them(self):
+        pipeline, downloads, _, _ = self.build()
+        list(pipeline('Hello.', voice='af_sky,af_alloy'))
+        blended = [d['filename'] for d in downloads if d['filename'].startswith('voices/')]
+        self.assertEqual(blended, ['voices/af_sky.pt', 'voices/af_alloy.pt'])
+
+    def test_a_voice_pack_is_cached_after_the_first_use(self):
+        pipeline, downloads, _, _ = self.build()
+        list(pipeline('One.', voice='af_sky'))
+        list(pipeline('Two.', voice='af_sky'))
+        fetched = [d for d in downloads if d['filename'] == 'voices/af_sky.pt']
+        self.assertEqual(len(fetched), 1, 'the second call must reuse the loaded pack')
+
+    def test_a_tensor_voice_is_passed_straight_through(self):
+        pipeline, downloads, _, _ = self.build()
+        import torch
+        tensor = np.zeros(3, dtype=np.float32)
+        with mock.patch.object(torch, 'Tensor', np.ndarray):
+            list(pipeline('Hello.', voice=tensor))
+        self.assertEqual([d for d in downloads if d['filename'].startswith('voices/')], [])
+
+
 if __name__ == '__main__':
     unittest.main()

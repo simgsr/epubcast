@@ -73,6 +73,30 @@ DEFAULT_LANGUAGES = frozenset({'a', 'b', 'z'})   # Kokoro: american, british, ch
 # voices anyway, so there is no reason to hide any locale by default.
 DEFAULT_LOCALES = frozenset(edge_voices.keys())
 
+# Human names for the codes above, so the language filter reads as a list of languages
+# rather than as a column of single letters and locale tags.
+KOKORO_LANGUAGE_NAMES = {
+    'a': 'English (US)', 'b': 'English (UK)', 'e': 'Spanish', 'f': 'French',
+    'h': 'Hindi', 'i': 'Italian', 'j': 'Japanese', 'p': 'Portuguese', 'z': 'Chinese',
+}
+
+EDGE_LANGUAGE_NAMES = {
+    'en-US': 'English (US)', 'en-GB': 'English (UK)', 'en-AU': 'English (AU)',
+    'en-CA': 'English (CA)', 'en-IN': 'English (IN)',
+    'zh-CN': 'Chinese (Simplified)', 'zh-TW': 'Chinese (Traditional)', 'zh-HK': 'Cantonese',
+    'es-ES': 'Spanish (ES)', 'es-MX': 'Spanish (MX)', 'fr-FR': 'French', 'de-DE': 'German',
+    'it-IT': 'Italian', 'ja-JP': 'Japanese', 'pt-BR': 'Portuguese (BR)', 'hi-IN': 'Hindi',
+}
+
+
+def language_name(code):
+    """A human name for a language code, in either naming scheme.
+
+    Unknown codes fall back to the code itself, so a locale added to `edge_voices` without
+    a name here still shows up legibly instead of blank.
+    """
+    return KOKORO_LANGUAGE_NAMES.get(code) or EDGE_LANGUAGE_NAMES.get(code) or code
+
 
 def is_default_language(code):
     """True for the codes ticked on startup, in either naming scheme.

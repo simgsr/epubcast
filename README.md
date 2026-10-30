@@ -1,6 +1,8 @@
 # epubcast: turn EPUB e-books into chaptered M4B audiobooks
 
-![epubcast GUI on macOS](./imgs/mac.png)
+<!-- Absolute URL on purpose: `imgs/` is excluded from the sdist, so a relative path renders
+     as a broken image anywhere the README is read outside a clone (PKG-INFO, mirrors). -->
+![epubcast GUI on macOS](https://raw.githubusercontent.com/simgsr/epubcast/main/imgs/mac.png)
 
 **This is a fork of [audiblez](https://github.com/santinic/audiblez), renamed and re-scoped.**
 It runs Kokoro's text-to-speech through PyTorch by default (portable, works on any machine)
@@ -70,22 +72,26 @@ with `pip install ".[gui]"` if you want the desktop UI.)
 
 `pip install .` and `requirements.txt` both resolve from version *ranges*, so two installs a
 few weeks apart can land on different versions — newer `spacy`, newer `torch`, a different
-`mlx-audio`. When you need the same environment twice, install from `poetry.lock`, which pins
-every transitive package:
+`mlx-audio`. When you need the same environment twice, use one of the two pinned paths:
 
 ```bash
 pip install poetry
-poetry install          # reads poetry.lock, not the ranges
+poetry install                 # reads poetry.lock, not the ranges
 ```
 
-CI runs `poetry check --lock`, so a `pyproject.toml` change that was not carried into the lock
-fails the build instead of drifting quietly. `.python-version` pins the interpreter at 3.12.
+```bash
+pip install -r requirements.lock   # same pins, for a pip-only workflow (core + edge)
+```
 
-Model weights are pinned too. The MLX engine is loaded at a fixed upstream commit, so a
-Hugging Face repo update cannot change the audio under unchanged code; `--repo-id` overrides
-the repo and then floats again. The **torch** engine cannot be pinned this way — `kokoro`
-0.9.4 exposes no revision parameter — so its weights track `hexgrad/Kokoro-82M`, which has not
-changed since April 2025.
+`requirements.lock` is generated from the lockfile with
+`poetry export -f requirements.txt --without-hashes --without-urls --extras edge`; CI
+regenerates it and fails if the committed copy differs. CI also runs `poetry check --lock`, so
+a `pyproject.toml` change that was not carried into the lock fails the build instead of
+drifting quietly. `.python-version` pins the interpreter at 3.12.
+
+Model weights are pinned too. Both engines load from a fixed upstream commit, so a Hugging
+Face repo update cannot change the audio under unchanged code. `--repo-id` overrides the repo,
+and a repo you name yourself floats on its branch unless you pin it.
 
 To also get the **Edge backend** — Microsoft's online neural voices, including real
 Cantonese and native traditional-script reading — add the extra:
@@ -160,6 +166,24 @@ epubcast-ui
 The GUI shows which backend will actually run, and lets you pick one explicitly. torch is
 the default; the torch device selector is greyed out only when MLX is selected, since it has
 no effect there.
+
+**Audition a voice before committing to it.** The `Preview` button next to the voice selector
+synthesizes a short sample with the selected engine, voice and speed, and plays it. The
+`Sample` dropdown chooses what it reads:
+
+| Sample | What it speaks |
+|---|---|
+| `Auto` | Whatever the selected voice can actually pronounce: English for English voices, Chinese for Chinese ones, both for an Edge *multilingual* voice, and the open chapter for any other language |
+| `English` | The built-in English sample |
+| `Chinese` | The built-in Chinese sample |
+| `Current chapter` | The opening of the section in the editor — the most representative check before a run |
+
+Previews use the same pipeline and text normalization as the real synthesis, so what you hear
+is what you get. `Preview chapter`, above the editor, reads the edited text the same way, so a
+correction can be checked without starting a conversion.
+
+Playback uses `afplay` on macOS and falls back to `ffplay` (from ffmpeg), then to the
+platform's own player.
 
 ## Sleep during a long run
 
