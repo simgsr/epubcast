@@ -33,12 +33,22 @@ class FakeMlxModel:
         yield FakeResult(np.ones(80, dtype=np.float32))
 
 
-def fake_mlx_audio(model):
-    """Build a stub mlx_audio package tree whose load_model returns `model`."""
+def fake_mlx_audio(model, loaded=None):
+    """Build a stub mlx_audio package tree whose load_model returns `model`.
+
+    `loaded`, when given, collects the arguments load_model was called with, so tests can
+    assert on the pinned revision without downloading anything.
+    """
     pkg = types.ModuleType('mlx_audio')
     tts = types.ModuleType('mlx_audio.tts')
     utils = types.ModuleType('mlx_audio.tts.utils')
-    utils.load_model = lambda repo_id: model
+
+    def load_model(repo_id, **kwargs):
+        if loaded is not None:
+            loaded.append(dict(repo_id=repo_id, **kwargs))
+        return model
+
+    utils.load_model = load_model
     pkg.tts = tts
     tts.utils = utils
     return {'mlx_audio': pkg, 'mlx_audio.tts': tts, 'mlx_audio.tts.utils': utils}
@@ -133,15 +143,16 @@ class InitialChoresPerSecTest(unittest.TestCase):
 
 
 class MlxAdapterTest(unittest.TestCase):
-    def build(self, lang_code='a', repo_id=None):
+    def build(self, lang_code='a', repo_id=None, revision=None):
         model = FakeMlxModel()
-        with mock.patch.dict(sys.modules, fake_mlx_audio(model)), \
+        loaded = []
+        with mock.patch.dict(sys.modules, fake_mlx_audio(model, loaded)), \
              mock.patch.object(backends, 'set_espeak_data_path', return_value='/data'):
-            pipeline = backends.MlxKokoroPipeline(lang_code, repo_id)
-        return pipeline, model
+            pipeline = backends.MlxKokoroPipeline(lang_code, repo_id, revision)
+        return pipeline, model, loaded
 
     def test_yields_kokoro_shaped_triples_with_numpy_audio(self):
-        pipeline, _ = self.build()
+        pipeline, _, _ = self.build()
         out = list(pipeline('Hello.', voice='af_sky', speed=1.0))
         self.assertEqual(len(out), 2)
         for graphemes, phonemes, audio in out:
@@ -152,18 +163,51 @@ class MlxAdapterTest(unittest.TestCase):
         self.assertEqual(len(np.concatenate([a for _, _, a in out])), 200)
 
     def test_passes_voice_speed_and_lang_through(self):
-        pipeline, model = self.build(lang_code='z')
+        pipeline, model, _ = self.build(lang_code='z')
         list(pipeline('你好。', voice='zf_xiaobei', speed=1.5, split_pattern=r'\n\n\n'))
         self.assertEqual(model.calls, [dict(text='你好。', voice='zf_xiaobei', speed=1.5,
                                             lang_code='z', split_pattern=r'\n\n\n')])
 
     def test_defaults_to_the_mlx_repo(self):
-        pipeline, _ = self.build()
+        pipeline, _, _ = self.build()
         self.assertEqual(pipeline.repo_id, backends.DEFAULT_REPOS['mlx'])
 
     def test_explicit_repo_id_wins(self):
-        pipeline, _ = self.build(repo_id='mlx-community/Kokoro-82M-4bit')
+        pipeline, _, _ = self.build(repo_id='mlx-community/Kokoro-82M-4bit')
         self.assertEqual(pipeline.repo_id, 'mlx-community/Kokoro-82M-4bit')
+
+    def test_default_repo_is_loaded_at_the_pinned_revision(self):
+        # A mutable HF repo means identical code can synthesise differently after an
+        # upstream update; the default load must therefore pin the validated commit.
+        pipeline, _, loaded = self.build()
+        self.assertEqual(pipeline.revision, backends.DEFAULT_REVISIONS['mlx'])
+        self.assertEqual(loaded[0]['revision'], backends.DEFAULT_REVISIONS['mlx'])
+
+    def test_explicit_revision_wins(self):
+        pinned = 'b' * 40
+        pipeline, _, loaded = self.build(revision=pinned)
+        self.assertEqual(pipeline.revision, pinned)
+        self.assertEqual(loaded[0]['revision'], pinned)
+
+    def test_a_custom_repo_id_is_not_pinned_to_the_default_repo_commit(self):
+        # DEFAULT_REVISIONS['mlx'] is a commit in the default repo; sending it to a
+        # different repo would fail to resolve, so a custom repo floats on its branch
+        # unless the caller pins it.
+        pipeline, _, loaded = self.build(repo_id='mlx-community/Kokoro-82M-4bit')
+        self.assertIsNone(pipeline.revision)
+        self.assertNotIn('revision', loaded[0])
+
+
+class PinnedRevisionsTest(unittest.TestCase):
+    """The pin recorded for a backend must describe the repo that backend loads."""
+
+    def test_every_repo_has_a_recorded_revision(self):
+        self.assertEqual(set(backends.DEFAULT_REVISIONS), set(backends.DEFAULT_REPOS))
+
+    def test_revisions_are_full_commit_hashes(self):
+        for backend, revision in backends.DEFAULT_REVISIONS.items():
+            with self.subTest(backend=backend):
+                self.assertRegex(revision, r'^[0-9a-f]{40}$')
 
 
 class GetPipelineTest(unittest.TestCase):

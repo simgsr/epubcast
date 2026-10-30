@@ -26,6 +26,17 @@ DEFAULT_REPOS = {
     'mlx': 'mlx-community/Kokoro-82M-bf16',
 }
 
+# The commit each repo above was validated against. A Hugging Face repo is mutable, so
+# without this a repo update silently swaps the weights under unchanged code and the same
+# book can come out sounding different -- the exact reproducibility hole a `repo_id` alone
+# leaves open. mlx-audio accepts a revision through load_model; kokoro 0.9.4 does not
+# (KModel calls hf_hub_download(repo_id=...) with no revision argument), so for the torch
+# engine this records what was validated rather than enforcing it.
+DEFAULT_REVISIONS = {
+    'torch': 'f3ff3571791e39611d31c381e3a41a3af07b4987',
+    'mlx': 'a71e4d38b236d968966a2002c4c895dbd12b1c3c',
+}
+
 # Starting guesses for the time estimate, in characters of text per second. These only seed
 # the estimate: it is recalibrated from real throughput once synthesis is under way.
 CHARS_PER_SEC_GUESS = {
@@ -174,12 +185,18 @@ class MlxKokoroPipeline:
     Audio is converted to numpy so np.concatenate downstream is unaffected.
     """
 
-    def __init__(self, lang_code, repo_id=None):
+    def __init__(self, lang_code, repo_id=None, revision=None):
         from mlx_audio.tts.utils import load_model
         set_espeak_data_path()
         self.lang_code = lang_code
         self.repo_id = repo_id or DEFAULT_REPOS['mlx']
-        self.model = load_model(self.repo_id)
+        # The pinned commit names a commit in the *default* repo. A caller-supplied repo_id
+        # is a different repo with its own history, so it stays on its default branch unless
+        # the caller pins it explicitly -- passing our SHA there would not resolve.
+        if revision is None and repo_id is None:
+            revision = DEFAULT_REVISIONS['mlx']
+        self.revision = revision
+        self.model = load_model(self.repo_id, **({'revision': revision} if revision else {}))
 
     def __call__(self, text, voice, speed=1.0, split_pattern=r'\n\n\n'):
         import numpy as np
@@ -372,13 +389,17 @@ class EdgePipeline:
         yield None, None, audio
 
 
-def get_pipeline(voice, lang_code=None, backend='auto', repo_id=None):
+def get_pipeline(voice, lang_code=None, backend='auto', repo_id=None, revision=None):
     """Build a TTS pipeline callable for `voice`.
 
     lang_code defaults to the first letter of the voice name, which is Kokoro's own
     convention ('af_sky' -> 'a'); an Edge voice carries its locale instead
     ('zh-TW-HsiaoChenNeural' -> 'zh-TW'). Pass it explicitly for a voice whose name does
     not carry the language, such as a path to a custom .pt voice pack.
+
+    repo_id/revision override which Kokoro weights are loaded. Left unset, the MLX engine
+    pins DEFAULT_REVISIONS['mlx'] so an upstream repo update cannot silently change the
+    audio; the torch engine has no revision lever in kokoro 0.9.4 (see DEFAULT_REVISIONS).
     """
     resolved = resolve_backend(backend)
     lang_code = lang_code_for(voice, lang_code)
@@ -393,7 +414,7 @@ def get_pipeline(voice, lang_code=None, backend='auto', repo_id=None):
             hint = ('Install it with: pip install ".[mlx]"' if is_apple_silicon()
                     else 'It needs Apple Silicon; use the default torch backend on this machine.')
             raise RuntimeError(f'The mlx backend is not available. {hint}')
-        return MlxKokoroPipeline(lang_code, repo_id)
+        return MlxKokoroPipeline(lang_code, repo_id, revision)
     if resolved == 'edge':
         if not edge_available():
             raise RuntimeError(
@@ -408,4 +429,8 @@ def get_pipeline(voice, lang_code=None, backend='auto', repo_id=None):
             'The torch backend is not installed. Install the default engine with: '
             'pip install .   (or pip install -r requirements.txt)')
     from kokoro import KPipeline
+    # No revision argument: kokoro 0.9.4 downloads through hf_hub_download(repo_id=...) and
+    # hf_hub_download rejects a local path, so an offline pre-pinned snapshot cannot be
+    # substituted either. DEFAULT_REVISIONS['torch'] records the commit this was validated
+    # against; the repo itself has not changed since 2025-04-10.
     return KPipeline(lang_code=lang_code, repo_id=repo_id or DEFAULT_REPOS['torch'])
