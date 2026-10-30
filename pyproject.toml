@@ -42,7 +42,10 @@ torch = [
 # native traditional-script reading) with no model download. Requires network at
 # synthesis time; the book's text is sent to Microsoft's servers.
 edge = [
-    "edge-tts (>=7.2.0)",
+    # >=7.3.1: 7.2.x sends Sec-MS-GEC-Version "1-...", which the service now answers with
+    # a 403 on every single request -- it installs cleanly and then cannot synthesize one
+    # word, so a preview or a run fails only once the network call is attempted.
+    "edge-tts (>=7.3.1)",
 ]
 gui = [
     "wxpython (>=4.2)",

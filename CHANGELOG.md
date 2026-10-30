@@ -58,6 +58,12 @@
 
 ### Fixed
 
+- **The Edge backend could not synthesize a single word.** `edge-tts` 7.2.x sends
+  `Sec-MS-GEC-Version: 1-...` on the websocket handshake, which the service now answers with
+  `403 Invalid response status` on every request, so `Preview` failed after its four retries
+  and a full run would have failed the same way. The `[edge]` floor is now `edge-tts (>=7.3.1)`,
+  which sends `2-...`; `poetry.lock` already pinned 7.3.1, so only an environment installed
+  from the old range (or an ad-hoc `pip install`) was affected.
 - A second preview click froze the window until the first preview finished: `on_preview_chapter`
   joined every outstanding preview thread on the UI thread before starting another.
 - Typing a non-numeric speed raised `ValueError` inside the change handler, after which the app
