@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `.python-version`, pinning the interpreter at 3.12. `requires-python` already bounded this
+  at 3.10–3.12, but nothing told a tool manager which of those three to pick, and a machine
+  with 3.14 installed fails resolution with an error that never names the boundary.
+- A CI job running `poetry check --lock`. `poetry.lock` was the only pinned environment in
+  the repo and nothing installed from it, so it could go stale indefinitely without any test
+  noticing; the check fails the build when `pyproject.toml` moves and the lock does not.
+- `test/test_find_chapters.py` to both CI matrices. It passed locally but no job ran it.
+
+### Changed
+
+- **The MLX engine now loads its weights at a pinned upstream commit.** A Hugging Face repo is
+  mutable, so a repo update could swap the weights under unchanged code and change how a book
+  sounds. `DEFAULT_REVISIONS` records the validated commit per engine and the MLX path passes
+  it through `load_model`. The torch path cannot: `kokoro` 0.9.4 calls
+  `hf_hub_download(repo_id=...)` with no revision argument, and a local pre-pinned snapshot
+  cannot be substituted because `hf_hub_download` rejects a path. Its entry records the commit
+  the release was validated against, which has not changed upstream since April 2025.
+- A caller-supplied `--repo-id` is *not* given the default revision, since that commit names
+  a commit in the default repo and would not resolve elsewhere. It stays on its branch unless
+  pinned explicitly.
+
+### Fixed
+
+- `test/test_main.py` downloads its books with `urllib` instead of shelling out to `wget`.
+  `wget` is not part of macOS, and `os.system` discarded the failure, so all eight tests died
+  on a bare `FileNotFoundError` naming the `.epub` with no hint at the cause. A failed
+  download now skips, which is what the network guard was always meant to do.
+- That file's `test_long_italian_sentence` was removed: it built a string and asserted
+  nothing. `test_leigh_and_play_result` now skips when its untracked `leigh.epub` fixture is
+  absent, and only plays the result when `ffplay` happens to be installed — playback is a
+  convenience for a human, not a dependency of the project.
+
 ## 0.7.0
 
 ### Changed
