@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Changed
+
+- **Renamed the project to `epubcast`.** `audiblez-mlx` had stopped describing the thing: since
+  0.6.0 the default engine is Kokoro on torch, and MLX is an opt-in extra, so the name promised
+  a backend most installs never load. It also reused upstream's command and import names, which
+  meant a machine with both installed had one silently shadow the other. The distribution, the
+  import package and the console scripts are now `epubcast` and `epubcast-ui` throughout, so
+  `pip install .` exposes a command that cannot be confused with upstream's. Nothing was ever
+  published to PyPI under either name, so nothing installed breaks. Upstream
+  [audiblez](https://github.com/santinic/audiblez) keeps its own name, its MIT licence and its
+  attribution in the README — the 221 commits it contributed are untouched in this history.
+
+### Removed
+
+- The design plans for the two backends that were tried and dropped (Qwen3-TTS, CosyVoice2), so
+  `docs/plans/` only documents engines the code actually has.
+- `.github/FUNDING.yml`, which pointed at upstream's sponsor rather than this fork's — a fork
+  should not collect sponsorship on someone else's behalf.
+
 ## 0.6.0
 
 Note the breaking change: Qwen3-TTS was added and then removed again within this range, so it
