@@ -29,9 +29,8 @@ DEFAULT_REPOS = {
 # The commit each repo above was validated against. A Hugging Face repo is mutable, so
 # without this a repo update silently swaps the weights under unchanged code and the same
 # book can come out sounding different -- the exact reproducibility hole a `repo_id` alone
-# leaves open. mlx-audio accepts a revision through load_model; kokoro 0.9.4 does not
-# (KModel calls hf_hub_download(repo_id=...) with no revision argument), so for the torch
-# engine this records what was validated rather than enforcing it.
+# leaves open. Both engines honour it: mlx-audio through load_model's revision argument, and
+# torch through PinnedTorchPipeline below, since kokoro's own loader takes none.
 DEFAULT_REVISIONS = {
     'torch': 'f3ff3571791e39611d31c381e3a41a3af07b4987',
     'mlx': 'a71e4d38b236d968966a2002c4c895dbd12b1c3c',
@@ -203,6 +202,90 @@ class MlxKokoroPipeline:
         for result in self.model.generate(text=text, voice=voice, speed=speed,
                                           lang_code=self.lang_code, split_pattern=split_pattern):
             yield None, None, np.asarray(result.audio)
+
+
+class PinnedTorchPipeline:
+    """Kokoro's KPipeline with every artifact resolved at a pinned commit.
+
+    kokoro 0.9.4 fetches its weights through hf_hub_download(repo_id=...) with no revision
+    argument, so an upstream repo update swaps them under unchanged code -- exactly the
+    drift the MLX path does not have. The seams kokoro does expose are enough to close it:
+    KModel takes explicit config/weights paths, KPipeline takes a ready KModel, and
+    load_voice takes a tensor. So the config, the weights and the voice pack are each
+    resolved here at DEFAULT_REVISIONS and still run through kokoro's own inference.
+
+    Anything unexpected -- a missing file, no network, a kokoro upgrade that moves these
+    seams -- falls back to the plain pipeline rather than failing the run. Unpinned weights
+    are a far better outcome than no audiobook, and the fallback says so out loud.
+    """
+
+    def __init__(self, lang_code, repo_id=None, revision=None):
+        self.lang_code = lang_code
+        self.repo_id = repo_id or DEFAULT_REPOS['torch']
+        # DEFAULT_REVISIONS['torch'] names a commit in the default repo; a caller-supplied
+        # repo has its own history, so it is left on its branch unless pinned explicitly.
+        if revision is None and repo_id is None:
+            revision = DEFAULT_REVISIONS['torch']
+        self.revision = revision
+        self._voice_packs = {}
+        self._pipeline = self._build(lang_code)
+
+    def _build(self, lang_code):
+        from kokoro import KPipeline
+        if self.revision is None:
+            return KPipeline(lang_code=lang_code, repo_id=self.repo_id)
+        try:
+            return self._build_pinned(lang_code)
+        except Exception as error:
+            print(f'Could not pin {self.repo_id} at {self.revision} '
+                  f'({type(error).__name__}: {error}); using the repo default branch instead.')
+            return KPipeline(lang_code=lang_code, repo_id=self.repo_id)
+
+    def _build_pinned(self, lang_code):
+        import torch
+        from huggingface_hub import hf_hub_download
+        from kokoro import KPipeline
+        from kokoro.model import KModel
+
+        weights_name = KModel.MODEL_NAMES.get(self.repo_id)
+        if weights_name is None:
+            raise ValueError(f'kokoro has no known weights filename for {self.repo_id}')
+        config = hf_hub_download(self.repo_id, 'config.json', revision=self.revision)
+        weights = hf_hub_download(self.repo_id, weights_name, revision=self.revision)
+        # Same device choice KPipeline makes for itself, so pinning changes only the source
+        # of the weights and not where the model runs.
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model = KModel(repo_id=self.repo_id, config=config, model=weights).to(device).eval()
+        return KPipeline(lang_code=lang_code, repo_id=self.repo_id, model=model)
+
+    def _load_voice(self, name):
+        """One voice pack, mirroring KPipeline.load_single_voice at the pinned commit."""
+        import torch
+        if name in self._voice_packs:
+            return self._voice_packs[name]
+        if name.endswith('.pt'):
+            # A local custom pack, exactly as kokoro treats it.
+            path = name
+        else:
+            from huggingface_hub import hf_hub_download
+            path = hf_hub_download(self.repo_id, f'voices/{name}.pt', revision=self.revision)
+        self._voice_packs[name] = torch.load(path, weights_only=True)
+        return self._voice_packs[name]
+
+    def _resolve_voice(self, voice):
+        """A voice name, a comma blend, or a local .pt path -> the tensor KPipeline wants."""
+        import torch
+        if isinstance(voice, torch.Tensor):
+            return voice
+        packs = [self._load_voice(part) for part in voice.split(',')]
+        if len(packs) == 1:
+            return packs[0]
+        # Blends are averaged, which is what kokoro's load_voice does for them.
+        return torch.mean(torch.stack(packs), dim=0)
+
+    def __call__(self, text, voice, speed=1.0, split_pattern=r'\n\n\n'):
+        yield from self._pipeline(text, voice=self._resolve_voice(voice), speed=speed,
+                                  split_pattern=split_pattern)
 
 
 # Text with nothing to pronounce. Sentence splitting hands back bare newlines (the last
@@ -397,9 +480,8 @@ def get_pipeline(voice, lang_code=None, backend='auto', repo_id=None, revision=N
     ('zh-TW-HsiaoChenNeural' -> 'zh-TW'). Pass it explicitly for a voice whose name does
     not carry the language, such as a path to a custom .pt voice pack.
 
-    repo_id/revision override which Kokoro weights are loaded. Left unset, the MLX engine
-    pins DEFAULT_REVISIONS['mlx'] so an upstream repo update cannot silently change the
-    audio; the torch engine has no revision lever in kokoro 0.9.4 (see DEFAULT_REVISIONS).
+    repo_id/revision override which Kokoro weights are loaded. Left unset, both engines pin
+    DEFAULT_REVISIONS for their repo, so an upstream update cannot silently change the audio.
     """
     resolved = resolve_backend(backend)
     lang_code = lang_code_for(voice, lang_code)
@@ -428,9 +510,4 @@ def get_pipeline(voice, lang_code=None, backend='auto', repo_id=None, revision=N
         raise RuntimeError(
             'The torch backend is not installed. Install the default engine with: '
             'pip install .   (or pip install -r requirements.txt)')
-    from kokoro import KPipeline
-    # No revision argument: kokoro 0.9.4 downloads through hf_hub_download(repo_id=...) and
-    # hf_hub_download rejects a local path, so an offline pre-pinned snapshot cannot be
-    # substituted either. DEFAULT_REVISIONS['torch'] records the commit this was validated
-    # against; the repo itself has not changed since 2025-04-10.
-    return KPipeline(lang_code=lang_code, repo_id=repo_id or DEFAULT_REPOS['torch'])
+    return PinnedTorchPipeline(lang_code, repo_id, revision)

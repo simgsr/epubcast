@@ -58,6 +58,7 @@ jobs:
           python test/test_imports.py
           python test/test_cli.py
           python test/test_find_chapters.py
+          python test/test_preview.py
       - name: Download test epub
         run: curl -sSL -o book.epub "$TEST_EPUB_URL"
       - name: Create audiobook
@@ -138,6 +139,7 @@ jobs:
           python test/test_imports.py
           python test/test_cli.py
           python test/test_find_chapters.py
+          python test/test_preview.py
       - name: Download test epub
         run: curl -sSL -o book.epub "$TEST_EPUB_URL"
       - name: Create audiobook
@@ -161,7 +163,17 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install poetry
-        run: pip install poetry
+        run: pip install poetry poetry-plugin-export
       - name: Confirm poetry.lock matches pyproject.toml
         run: poetry check --lock
+      # requirements.lock is the pinned pip path; it is generated, so it silently goes stale
+      # whenever the lockfile moves. Regenerating and diffing keeps the committed copy honest.
+      - name: Confirm requirements.lock matches the lockfile
+        run: |
+          poetry export -f requirements.txt --without-hashes --without-urls --extras edge \
+            -o /tmp/requirements.lock
+          if ! diff -u requirements.lock /tmp/requirements.lock; then
+            echo "requirements.lock is stale: regenerate it with the command above."
+            exit 1
+          fi
 

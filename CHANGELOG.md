@@ -11,22 +11,63 @@
   the repo and nothing installed from it, so it could go stale indefinitely without any test
   noticing; the check fails the build when `pyproject.toml` moves and the lock does not.
 - `test/test_find_chapters.py` to both CI matrices. It passed locally but no job ran it.
+- **A `Preview` button next to the voice selector.** Choosing a voice by name alone meant
+  committing a multi-hour run to one nobody had heard. It synthesizes a short sample with the
+  selected engine, voice and speed through the same pipeline as the real run, and plays it.
+  A `Sample` dropdown picks what it reads: `Auto` (English for English voices, Chinese for
+  Chinese ones, both for an Edge *multilingual* voice, the open chapter otherwise), `English`,
+  `Chinese`, or `Current chapter`. The sample-choice logic lives in `epubcast/preview.py` so
+  it is testable without wxPython, and playback resolves to `afplay`, then `ffplay`, then the
+  platform's own player.
+- `requirements.lock`, a fully pinned pip path generated from `poetry.lock` with
+  `poetry export`, plus a CI step that regenerates it and fails on any difference. The
+  lockfile was previously the only pinned environment and nothing consumed it.
+- A status bar, an engine badge in the top bar, and a one-line selection summary above the
+  Start button stating how many chapters and characters the run will cover.
 
 ### Changed
 
-- **The MLX engine now loads its weights at a pinned upstream commit.** A Hugging Face repo is
+- **The torch engine now loads its weights at a pinned upstream commit too.** Previously its
+  entry in `DEFAULT_REVISIONS` only recorded what had been validated, because `kokoro` 0.9.4
+  calls `hf_hub_download(repo_id=...)` with no revision argument and rejects a local path for
+  `repo_id`. The seams kokoro does expose are enough to close it: `KModel` takes explicit
+  config and weights paths, `KPipeline` takes a ready `KModel`, and `load_voice` takes a
+  tensor. `PinnedTorchPipeline` resolves the config, the weights and the voice pack at the
+  pinned commit and still runs kokoro's own inference. If any of that fails — no network, a
+  kokoro upgrade that moves these seams — it falls back to the plain pipeline and says so,
+  since unpinned weights beat no audiobook.
+- **The MLX engine loads its weights at a pinned upstream commit.** A Hugging Face repo is
   mutable, so a repo update could swap the weights under unchanged code and change how a book
   sounds. `DEFAULT_REVISIONS` records the validated commit per engine and the MLX path passes
-  it through `load_model`. The torch path cannot: `kokoro` 0.9.4 calls
-  `hf_hub_download(repo_id=...)` with no revision argument, and a local pre-pinned snapshot
-  cannot be substituted because `hf_hub_download` rejects a path. Its entry records the commit
-  the release was validated against, which has not changed upstream since April 2025.
+  it through `load_model`.
 - A caller-supplied `--repo-id` is *not* given the default revision, since that commit names
   a commit in the default repo and would not resolve elsewhere. It stays on its branch unless
   pinned explicitly.
+- **The window layout was rebuilt around hierarchy.** Before a book is open it shows a welcome
+  state rather than a blank grey frame with two buttons in the corner. Once one is open, the
+  settings column is a stack of single-bordered cards (Book / Engine / Voice / Output) above a
+  footer that never scrolls — the Start button used to sit inside the scrolling area, below
+  the fold in most windows. Section cards are parented to their `wx.StaticBox`, which removes
+  the doubled inner frame and the "should be created as child of its wxStaticBox" warning.
+- Labels now sit above their controls instead of in a label column, and each language row
+  reads as a language rather than a code (`🇺🇸 English (US) (a)`). Helper text uses the
+  system's grey so it stays legible in dark mode, where the hardcoded grey sat at the edge of
+  legibility.
+- `Speed` is a 0.5–2.0× slider instead of a free-text box, and the chapter table states exact
+  character counts while the Book card uses a compact form (`1.4M characters`).
 
 ### Fixed
 
+- A second preview click froze the window until the first preview finished: `on_preview_chapter`
+  joined every outstanding preview thread on the UI thread before starting another.
+- Typing a non-numeric speed raised `ValueError` inside the change handler, after which the app
+  would not start a run and never said why.
+- The editor opened empty beside a heading naming a section, which read as a rendering failure.
+  It now shows the first section immediately.
+- Starting with no chapters ticked ran a full model load to produce nothing; it now says so.
+- Previews needed `ffplay` specifically, which is absent on a machine with no ffmpeg; playback
+  now resolves through `afplay` and then the platform player.
+- `wx.EmptyImage` (deprecated) replaced with `wx.Image`.
 - `test/test_main.py` downloads its books with `urllib` instead of shelling out to `wget`.
   `wget` is not part of macOS, and `os.system` discarded the failure, so all eight tests died
   on a bare `FileNotFoundError` naming the `.epub` with no hint at the cause. A failed
@@ -35,6 +76,11 @@
   nothing. `test_leigh_and_play_result` now skips when its untracked `leigh.epub` fixture is
   absent, and only plays the result when `ffplay` happens to be installed — playback is a
   convenience for a human, not a dependency of the project.
+- The README's screenshot used a relative path, but `imgs/` is excluded from the sdist, so it
+  rendered as a broken image anywhere the README is read outside a clone. It is now an
+  absolute URL.
+- `.gitignore` no longer ignores `*.sh` and `*.json` project-wide, which would have silently
+  swallowed a legitimate script or fixture.
 
 ## 0.7.0
 

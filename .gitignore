@@ -8,8 +8,6 @@ chapters.txt
 *.mp3
 *.mp4
 *.epub
-*.sh
-*.json
 *.onnx
 dist
 .venv
