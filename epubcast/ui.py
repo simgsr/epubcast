@@ -8,10 +8,22 @@ import subprocess
 import traceback
 import io
 import os
-import wx
-from wx.lib.newevent import NewEvent
-from wx.lib.scrolledpanel import ScrolledPanel
-from PIL import Image
+
+# wxPython and Pillow are an optional extra ([gui]), but the `epubcast-ui` entry point is
+# installed either way -- so a plain install puts a command on PATH that dies on its first
+# line with "No module named 'wx'". Name the command that fixes it instead.
+try:
+    import wx
+    from wx.lib.newevent import NewEvent
+    from wx.lib.scrolledpanel import ScrolledPanel
+    from PIL import Image
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "The GUI needs wxPython and Pillow, which the [gui] extra provides:\n"
+        "  ./scripts/install.sh --gui\n"
+        "  (or: .venv/bin/python -m pip install -e '.[gui]')\n"
+        "The command line does not need them: epubcast book.epub -v af_sky"
+    ) from exc
 
 from epubcast import DEFAULT_OUTPUT_FOLDER
 from epubcast import preview
