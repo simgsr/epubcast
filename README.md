@@ -41,11 +41,13 @@ One command, from inside this folder:
 ./scripts/install.sh
 ```
 
-That is the whole install. It leaves you with both entry points working:
+That is the whole install. It leaves you with a shell where `cd` into this folder activates
+the environment by itself, and both entry points working:
 
 ```bash
-.venv/bin/epubcast book.epub -v af_sky     # command line
-.venv/bin/epubcast-ui                      # desktop GUI (macOS)
+cd /path/to/epubcast     # from a new terminal; the venv activates on cd
+epubcast book.epub -v af_sky     # command line
+epubcast-ui                      # desktop GUI (macOS)
 ```
 
 What it does, so nothing is hidden:
@@ -58,11 +60,19 @@ What it does, so nothing is hidden:
 - installs the **pinned** dependency set from `requirements.lock` (core, plus the Edge voices,
   plus the GUI on macOS)
 - installs epubcast itself *editable*, so `epubcast` tracks the working tree
+- sets up [direnv](https://direnv.net) so `cd` activates the venv: installs direnv if needed,
+  adds its hook to your `~/.zshrc` or `~/.bashrc` once, and allows the repo's `.envrc`
 - verifies the command line, the GUI import, the backend, and both system tools — and fails
   loudly rather than leaving half a working app
 
 It is safe to re-run: after a `git pull`, run it again to pick up new pins. Flags: `--mlx`
-(below), `--no-brew` (never touch Homebrew).
+(below), `--no-brew` (never touch Homebrew), `--no-shell-setup` (leave your shell rc alone —
+then `source .venv/bin/activate` yourself).
+
+> The direnv hook only applies to shells started *after* the install. If `cd` does not
+> activate anything in the terminal you have open, run `exec zsh` (or open a new tab) once —
+> and note that pasting `source .venv/bin/activate` on top of an already-activated shell
+> shows the environment name twice in your prompt, which is harmless but redundant.
 
 Then [convert a book](#convert-a-book).
 
@@ -152,18 +162,21 @@ detection fails.
 
 ### Convert a book
 
-```bash
-.venv/bin/epubcast book.epub -v af_sky
-```
+With the environment active — which `cd` does for you after the install:
 
-(or `source .venv/bin/activate` once per shell, then just `epubcast book.epub -v af_sky`)
+```bash
+epubcast book.epub -v af_sky
+```
 
 Everything is written to an **`audiobooks/`** folder, created if missing. Point it elsewhere
 with `-o`:
 
 ```bash
-.venv/bin/epubcast book.epub -v af_sky -o ~/Audiobooks
+epubcast book.epub -v af_sky -o ~/Audiobooks
 ```
+
+Without direnv — or from a script, which never sees a prompt hook — prefix the venv's own
+binary instead: `.venv/bin/epubcast book.epub -v af_sky`.
 
 It first creates one `.wav` per chapter, then produces the `book.m4b` you can play in VLC or
 any audiobook player. The `.m4b` is only produced if `ffmpeg` is installed.
@@ -190,8 +203,10 @@ The GUI is a simple graphical interface to use epubcast. The install above alrea
 it on macOS — no extra step:
 
 ```bash
-.venv/bin/epubcast-ui
+epubcast-ui
 ```
+
+(From a shell where `cd` did not activate the venv, use `.venv/bin/epubcast-ui`.)
 
 On Linux the GUI is not available: wxPython ships no Linux wheels, so the `[gui]` extra is
 gated to macOS and `epubcast-ui` stops with a message naming the extra. The command line works

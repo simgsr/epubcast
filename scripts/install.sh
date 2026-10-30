@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # epubcast bootstrap: one idempotent command that builds a complete, pinned environment.
 #
-#   ./scripts/install.sh        # everything the app needs: CLI, GUI (macOS), Edge voices
+#   ./scripts/install.sh        # everything the app needs: CLI, GUI (macOS), Edge voices,
+#                               # and `cd` into this folder activating the venv
 #   ./scripts/install.sh --mlx  # also the Apple-GPU accelerator (Apple Silicon only)
+#   flags: --no-brew (never touch Homebrew), --no-shell-setup (leave your shell rc alone)
 #
 # Safe to re-run: an existing .venv is reused, already-satisfied pins are skipped, and the
 # project is reinstalled editable so a `git pull` is picked up by simply re-running this.
@@ -19,11 +21,13 @@ die()  { printf '\033[31merror\033[0m %s\n' "$*" >&2; exit 1; }
 
 WITH_MLX=0
 ALLOW_BREW=1
+SETUP_SHELL=1
 for arg in "$@"; do
   case "$arg" in
-    --mlx)     WITH_MLX=1 ;;
-    --no-brew) ALLOW_BREW=0 ;;
-    -h|--help) sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --mlx)        WITH_MLX=1 ;;
+    --no-brew)    ALLOW_BREW=0 ;;
+    --no-shell-setup) SETUP_SHELL=0 ;;
+    -h|--help) sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $arg (try --help)" ;;
   esac
 done
@@ -103,7 +107,46 @@ if [ "$WITH_MLX" = 1 ]; then
   "${PIP[@]}" install --quiet -e "$ROOT[mlx]"
 fi
 
-# --- 5. Verify --------------------------------------------------------------------------
+# --- 5. `cd` into the project activates the venv -----------------------------------------
+# The .envrc in the repo root is what does the activation; this makes sure the machine can
+# honour it. Without the shell hook direnv is silent, which looks exactly like a broken
+# install -- so install direnv, add the hook to the rc file, and allow the file. All three
+# steps are no-ops once done; nothing here is required to run the app, only to make the
+# prompt do the right thing.
+if [ "$SETUP_SHELL" = 1 ]; then
+  say "Setting up activation on cd"
+  if ! command -v direnv >/dev/null 2>&1; then
+    if [ "$ALLOW_BREW" = 1 ] && command -v brew >/dev/null 2>&1; then
+      brew install direnv
+    else
+      warn "direnv is not installed: run 'brew install direnv', then re-run this script"
+    fi
+  fi
+  SHELL_NAME=${SHELL##*/}
+  case "$SHELL_NAME" in
+    zsh)  RC="$HOME/.zshrc" ;;
+    bash) RC="$HOME/.bashrc" ;;
+    *)    RC='' ;;
+  esac
+  if command -v direnv >/dev/null 2>&1; then
+    if [ -n "$RC" ]; then
+      if grep -q 'direnv hook' "$RC" 2>/dev/null; then
+        ok "direnv hook already in $RC"
+      else
+        printf '\n# direnv: load .envrc, so cd into a project activates its venv\neval "$(direnv hook %s)"\n' \
+          "$SHELL_NAME" >> "$RC"
+        ok "added the direnv hook to $RC (takes effect in a new terminal)"
+      fi
+    else
+      warn "unknown shell '$SHELL_NAME': add 'eval \"\$(direnv hook $SHELL_NAME)\"' to its rc yourself"
+    fi
+    ( cd "$ROOT" && direnv allow . ) >/dev/null 2>&1 \
+      && ok "this folder's .envrc is allowed" \
+      || warn "could not allow $ROOT/.envrc: run 'direnv allow' there once"
+  fi
+fi
+
+# --- 6. Verify --------------------------------------------------------------------------
 # Installing cleanly is not the same as running: check what a first conversion and a first
 # GUI launch actually touch, so a broken environment fails here and not mid-run.
 say "Verifying"
@@ -127,16 +170,17 @@ ok "espeak-ng on PATH"
 say "Done."
 cat <<EOF
 
-Run it:
+Run it — from a new terminal, \`cd\` into this folder and the venv activates itself:
 
-  $VENV/bin/epubcast book.epub -v af_sky
+  cd $ROOT
+  epubcast book.epub -v af_sky
 EOF
 if [ "$IS_MAC" = 1 ]; then
-  printf '  %s\n' "$VENV/bin/epubcast-ui      (desktop GUI)"
+  printf '  %s\n' "epubcast-ui                      (desktop GUI)"
 fi
 cat <<EOF
 
-or activate the environment once per shell and drop the prefix:
+Or without direnv, in this shell:
 
   source $VENV/bin/activate
 

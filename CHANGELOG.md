@@ -33,6 +33,12 @@
   when they are missing, and then verifies the CLI, the GUI import, the backend and both
   system tools instead of declaring success and leaving a half-working app. It is idempotent,
   so `git pull && ./scripts/install.sh` is the upgrade path.
+- **`cd` into the checkout now activates the venv, for everyone.** The `.envrc` that does it
+  was git-ignored, so it only ever existed on the machine that wrote it, and direnv stays
+  silent without its shell hook — an install that looked complete but left `epubcast` off
+  PATH. `.envrc` is committed now (it holds no secrets), `.direnv/` is ignored instead, and
+  `scripts/install.sh` installs direnv if it is missing, appends the hook to `~/.zshrc` or
+  `~/.bashrc` once, and allows the file. `--no-shell-setup` skips all of that.
 - A CI job (`scripts-install`) that runs that command verbatim on a clean macOS checkout, then
   checks both entry points start, that a second run is a no-op, and that it works from another
   directory. The README had nothing testing it, which is why it drifted twice.

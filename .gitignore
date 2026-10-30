@@ -20,5 +20,6 @@ audiobooks/*
 # ffmpeg intermediates left next to the output
 cover
 
-# Local direnv config: per-developer, activates .venv on cd
-.envrc
+# direnv: .envrc is committed (it activates .venv on cd and holds no secrets); the venv and
+# direnv's own state stay out of the tree
+.direnv/
